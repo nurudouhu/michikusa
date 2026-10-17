@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>道クサ - みんなの居場所</title>
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Supabase JS (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- React & ReactDOM (CDN) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bgMain: '#F8F6F0',
+            cardBg: '#FFFFFF',
+            accentPink: '#E08A85',
+            accentPinkHover: '#D07671',
+            accentPinkLight: '#FDF2F1',
+            textMain: '#3A3A3A',
+            textSub: '#8C8A85',
+            badgeBg: '#F2F0E9',
+            borderSoft: '#EFECE6'
+          },
+          boxShadow: {
+            soft: '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
+            floating: '0 8px 30px rgba(0, 0, 0, 0.08)'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #F8F6F0;
+      color: #3A3A3A;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    /* カスタムスクロールバー */
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #E08A85;
+      border-radius: 10px;
+    }
+  </style>
+</head>
+<body class="flex justify-center bg-gray-100 min-h-screen">
+  <div id="root" class="w-full max-w-md bg-bgMain min-h-screen shadow-2xl relative flex flex-col"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ★★★ ご自身の Supabase 情報に書き換えてください ★★★
+    const SUPABASE_URL = 'https://tmujuurcxptdqgcprpqu.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtdWp1dXJjeHB0ZHFnY3BycHF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxOTU1MTMsImV4cCI6MjEwNzc3MTUxM30.TJJsag5UetFYOzqQ02wMM73Lg0M6ut_aszxvi9hZEdA';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    function App() {
+      const [currentTab, setCurrentTab] = useState('home');
+      const [selectedRoom, setSelectedRoom] = useState(null);
+      const [currentUser, setCurrentUser] = useState(null);
+      const [userProfile, setUserProfile] = useState(null);
+      const [rooms, setRooms] = useState([]);
+      const [messages, setMessages] = useState([]);
+      const [inputText, setInputText] = useState('');
+      const [blockedUsers, setBlockedUsers] = useState([]);
+      const [isNightRestricted, setIsNightRestricted] = useState(false);
+      const [isCallTime, setIsCallTime] = useState(false);
+      const [isMicOn, setIsMicOn] = useState(true);
+      const [isMuted, setIsMuted] = useState(false);
+      const [isEditingProfile, setIsEditingProfile] = useState(false);
+      const [newUsername, setNewUsername] = useState('');
+      const [isRoomModalOpen, setIsRoomModalOpen] = useState(false);
+      const [newRoomName, setNewRoomName] = useState('');
+      const [newRoomDesc, setNewRoomDesc] = useState('');
+
+      const messagesEndRef = useRef(null);
+
+      useEffect(() => {
+        initAuth();
+        fetchRooms();
+        checkTimeRestrictions();
+        const interval = setInterval(checkTimeRestrictions, 60000);
+        return () => clearInterval(interval);
+      }, []);
+
+      function checkTimeRestrictions() {
+        const now = new Date();
+        const jstHour = (now.getUTCHours() + 9) % 24;
+        const jstMin = now.getUTCMinutes();
+        const totalMinutes = jstHour * 60 + jstMin;
+
+        setIsNightRestricted(totalMinutes >= 1290 || totalMinutes < 390);
+        setIsCallTime(jstHour === 12 && jstMin <= 30);
+      }
+
+      async function initAuth() {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          setCurrentUser(session.user);
+          fetchProfile(session.user.id);
+        } else {
+          const { data } = await supabase.auth.signInAnonymously();
+          if (data?.user) {
+            setCurrentUser(data.user);
+            fetchProfile(data.user.id);
+          }
+        }
+      }
+
+      async function fetchProfile(userId) {
+        const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+        if (data) setUserProfile(data);
+      }
+
+      async function fetchRooms() {
+        const { data } = await supabase.from('rooms').select('*').order('created_at', { ascending: true });
+        if (data) setRooms(data);
+      }
+
+      useEffect(() => {
+        if (!currentUser || !selectedRoom) return;
+        fetchMessages();
+        fetchBlockedUsers();
+
+        const channel = supabase
+          .channel(`room-${selectedRoom.id}`)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, (payload) => {
+            fetchNewMessage(payload.new);
+          })
+          .subscribe();
+
+        return () => { supabase.removeChannel(channel); };
+      }, [selectedRoom, currentUser]);
+
+      async function fetchMessages() {
+        const { data } = await supabase
+          .from('messages')
+          .select('*, profile:profiles(*)')
+          .eq('room_id', selectedRoom.id)
+          .order('created_at', { ascending: true });
+        if (data) {
+          setMessages(data);
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+      }
+
+      async function fetchNewMessage(msg) {
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', msg.user_id).single();
+        setMessages((prev) => [...prev, { ...msg, profile }]);
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      async function fetchBlockedUsers() {
+        const { data } = await supabase.from('blocks').select('blocked_id').eq('blocker_id', currentUser.id);
+        if (data) setBlockedUsers(data.map(b => b.blocked_id));
+      }
+
+      async function handleSendMessage(e) {
+        e.preventDefault();
+        if (!inputText.trim() || isNightRestricted || !currentUser) return;
+        const text = inputText;
+        setInputText('');
+        await supabase.from('messages').insert({ room_id: selectedRoom.id, user_id: currentUser.id, content: text });
+      }
+
+      async function handleBlockUser(targetUserId) {
+        if (confirm('このユーザーをブロックしますか？')) {
+          await supabase.from('blocks').insert({ blocker_id: currentUser.id, blocked_id: targetUserId });
+          setBlockedUsers(prev => [...prev, targetUserId]);
+        }
+      }
+
+      async function handleReportMessage(messageId) {
+        const reason = prompt('通報理由を入力してください:');
+        if (reason) {
+          await supabase.from('reports').insert({ reporter_id: currentUser.id, message_id: messageId, reason: reason });
+          alert('通報を受け付けました。');
+        }
+      }
+
+      async function handleUpdateProfile() {
+        if (!newUsername.trim() || !userProfile) return;
+        await supabase.from('profiles').update({ username: newUsername }).eq('id', userProfile.id);
+        setUserProfile({ ...userProfile, username: newUsername });
+        setIsEditingProfile(false);
+      }
+
+      async function handleCreateRoom(e) {
+        e.preventDefault();
+        if (!newRoomName.trim()) return;
+        await supabase.from('rooms').insert({ name: newRoomName, description: newRoomDesc, created_by: userProfile.id });
+        setNewRoomName(''); setNewRoomDesc('');
+        fetchRooms();
+        setIsRoomModalOpen(false);
+      }
+
+      return (
+        <div className="flex flex-col min-h-screen relative pb-20">
+          <main className="flex-1 overflow-y-auto">
+            {/* ホーム画面 */}
+            {currentTab === 'home' && (
+              <div className="p-5 space-y-6">
+                {/* ヘッダー */}
+                <header className="flex justify-between items-start pt-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h1 className="text-2xl font-black text-textMain tracking-wider">道 ク サ</h1>
+                      <span className="text-xl">🌿</span>
+                    </div>
+                    <p className="text-[11px] text-textSub mt-0.5 tracking-wide">話すたび、少しだけ前を向ける場所。</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button className="w-8 h-8 rounded-full bg-cardBg flex items-center justify-center shadow-soft text-textSub text-sm hover:scale-105 transition">🔍</button>
+                    <button className="w-8 h-8 rounded-full bg-cardBg flex items-center justify-center shadow-soft text-textSub text-sm hover:scale-105 transition">🔔</button>
+                    <div
+                      onClick={() => { setNewUsername(userProfile?.username || ''); setIsEditingProfile(true); }}
+                      className="w-9 h-9 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-sm cursor-pointer shadow-soft hover:scale-105 transition"
+                    >
+                      {userProfile?.username?.substring(0, 1) || '道'}
+                    </div>
+                  </div>
+                </header>
+
+                {/* 編集モーダルインライン */}
+                {isEditingProfile && (
+                  <div className="p-3.5 bg-cardBg rounded-2xl shadow-floating border border-accentPink/30 flex gap-2 items-center animate-fade-in">
+                    <input
+                      type="text"
+                      value={newUsername}
+                      onChange={(e) => setNewUsername(e.target.value)}
+                      className="flex-1 text-xs border border-borderSoft p-2 rounded-xl focus:outline-none focus:border-accentPink"
+                      placeholder="新しいニックネーム"
+                    />
+                    <button onClick={handleUpdateProfile} className="bg-accentPink text-white px-3 py-2 rounded-xl text-xs font-bold hover:bg-accentPinkHover">保存</button>
+                    <button onClick={() => setIsEditingProfile(false)} className="text-xs text-textSub px-1">取消</button>
+                  </div>
+                )}
+
+                {/* 管理人お知らせ */}
+                <div className="bg-cardBg rounded-2xl p-3.5 shadow-soft border border-borderSoft flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-2xl bg-badgeBg flex items-center justify-center text-base">📣</div>
+                    <div>
+                      <p className="text-xs font-bold text-textMain">管理人からのお知らせ</p>
+                      <p className="text-[11px] text-textSub mt-0.5">みんなで楽しく、ゆっくり過ごしましょう🌱</p>
+                    </div>
+                  </div>
+                  <span className="text-textSub text-xs font-bold">＞</span>
+                </div>
+
+                {/* 今のラジオ・通話 */}
+                <div>
+                  <h2 className="text-xs font-bold text-textSub mb-2.5 px-1 tracking-wider">今のラジオ・通話</h2>
+                  <div
+                    onClick={() => setCurrentTab('call')}
+                    className="bg-cardBg rounded-2xl p-4 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentPink transition group"
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-11 h-11 rounded-2xl bg-accentPinkLight text-accentPink flex items-center justify-center text-xl group-hover:scale-105 transition">
+                        🎙️
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-bold text-accentPink">ただいま 通話中</p>
+                          <span className="w-2 h-2 rounded-full bg-accentPink animate-ping"></span>
+                        </div>
+                        <p className="text-[11px] text-textSub mt-0.5">みんなでおしゃべり（音声のみ）</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 bg-badgeBg px-2.5 py-1 rounded-full text-[11px] text-textSub font-bold">
+                      <span>👤 12人</span>
+                      <span>＞</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 参加中のルーム */}
+                <div>
+                  <div className="flex justify-between items-center mb-2.5 px-1">
+                    <h2 className="text-xs font-bold text-textSub tracking-wider">参加中のルーム</h2>
+                    <span className="text-[11px] text-accentPink font-bold cursor-pointer">すべて見る ＞</span>
+                  </div>
+                  <div className="space-y-2.5">
+                    {rooms.map((room) => (
+                      <div
+                        key={room.id}
+                        onClick={() => { setSelectedRoom(room); setCurrentTab('chat'); }}
+                        className="bg-cardBg rounded-2xl p-3.5 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentPink/60 transition group"
+                      >
+                        <div className="flex items-center gap-3.5">
+                          <div className="w-11 h-11 rounded-2xl bg-badgeBg flex items-center justify-center text-lg border border-borderSoft group-hover:scale-105 transition">
+                            💬
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-textMain group-hover:text-accentPink transition">{room.name}</p>
+                            <p className="text-[11px] text-textSub mt-0.5">{room.description}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-accentPink"></span>
+                          <span className="text-[11px] font-bold text-textSub">128</span>
+                          <span className="text-textSub text-xs ml-1">＞</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* おすすめ */}
+                <div>
+                  <div className="flex justify-between items-center mb-2.5 px-1">
+                    <h2 className="text-xs font-bold text-textSub tracking-wider">おすすめ</h2>
+                    <span className="text-[11px] text-accentPink font-bold cursor-pointer">もっと見る ＞</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2.5">
+                    <div className="bg-cardBg p-3 rounded-2xl shadow-soft border border-borderSoft text-center hover:scale-105 transition cursor-pointer">
+                      <span className="text-2xl">📻</span>
+                      <p className="text-xs font-bold mt-1.5 text-textMain">道クサラジオ</p>
+                      <p className="text-[9px] text-textSub mt-0.5">今週のおすすめ</p>
+                    </div>
+                    <div className="bg-cardBg p-3 rounded-2xl shadow-soft border border-borderSoft text-center hover:scale-105 transition cursor-pointer">
+                      <span className="text-2xl">🐻</span>
+                      <p className="text-xs font-bold mt-1.5 text-textMain">はじめての方</p>
+                      <p className="text-[9px] text-textSub mt-0.5">道クサの使い方</p>
+                    </div>
+                    <div className="bg-cardBg p-3 rounded-2xl shadow-soft border border-borderSoft text-center hover:scale-105 transition cursor-pointer">
+                      <span className="text-2xl">📢</span>
+                      <p className="text-xs font-bold mt-1.5 text-textMain">運営お知らせ</p>
+                      <p className="text-[9px] text-textSub mt-0.5">大切なお知らせ</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* チャット画面 */}
+            {currentTab === 'chat' && (
+              <div className="flex flex-col h-screen bg-bgMain">
+                <header className="bg-cardBg px-4 py-3.5 border-b border-borderSoft flex justify-between items-center sticky top-0 z-10 shadow-soft">
+                  <button onClick={() => setCurrentTab('home')} className="text-xs font-bold text-accentPink flex items-center gap-1">
+                    ＜ 戻る
+                  </button>
+                  <div className="text-center">
+                    <h2 className="font-bold text-xs text-textMain">{selectedRoom?.name || 'チャット'}</h2>
+                    <p className="text-[9px] text-textSub">128人が参加中</p>
+                  </div>
+                  <div className="w-8" />
+                </header>
+
+                {isNightRestricted && (
+                  <div className="bg-accentPinkLight text-accentPink text-xs p-2.5 text-center font-bold border-b border-accentPink/20 flex items-center justify-center gap-1.5">
+                    <span>🌙</span>
+                    <span>ただいまお休み時間です (21:30 〜 06:30 は投稿できません)</span>
+                  </div>
+                )}
+
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {messages.filter(m => !blockedUsers.includes(m.user_id)).map((msg) => {
+                    const isMe = msg.user_id === currentUser?.id;
+                    return (
+                      <div key={msg.id} className={`flex gap-2.5 ${isMe ? 'flex-row-reverse' : ''}`}>
+                        <div className="w-8 h-8 rounded-full bg-badgeBg border border-borderSoft flex items-center justify-center font-bold text-xs shrink-0 text-textSub">
+                          {msg.profile?.username?.substring(0, 1) || '道'}
+                        </div>
+                        <div className={`max-w-[72%] ${isMe ? 'items-end' : ''}`}>
+                          <p className="text-[10px] text-textSub mb-1 px-1">{msg.profile?.username || 'ユーザー'}</p>
+                          <div className={`p-3.5 rounded-2xl text-xs leading-relaxed shadow-soft ${
+                            isMe ? 'bg-accentPink text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
+                          }`}>
+                            {msg.content}
+                          </div>
+                        </div>
+                        {!isMe && (
+                          <div className="flex flex-col justify-end gap-1 text-[10px] opacity-40 hover:opacity-100 transition">
+                            <button onClick={() => handleReportMessage(msg.id)} title="通報">🚨</button>
+                            <button onClick={() => handleBlockUser(msg.user_id)} title="ブロック">🚫</button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                <form onSubmit={handleSendMessage} className="p-3 bg-cardBg border-t border-borderSoft flex gap-2 items-center shadow-floating">
+                  <input
+                    type="text"
+                    disabled={isNightRestricted}
+                    placeholder={isNightRestricted ? 'お休み時間中です 🌙' : 'メッセージを入力...'}
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    className="flex-1 bg-bgMain rounded-full px-4 py-2.5 text-xs border border-borderSoft focus:outline-none focus:border-accentPink disabled:bg-gray-100"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isNightRestricted || !inputText.trim()}
+                    className="w-9 h-9 rounded-full bg-accentPink text-white flex items-center justify-center text-sm font-bold shadow-soft disabled:opacity-40 hover:bg-accentPinkHover transition"
+                  >
+                    ➔
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* 音声通話画面 */}
+            {currentTab === 'call' && (
+              <div className="flex flex-col h-screen bg-bgMain p-5 justify-between">
+                <button onClick={() => setCurrentTab('home')} className="text-xs font-bold text-accentPink self-start">＜ 戻る</button>
+
+                <div className="text-center space-y-4">
+                  <div className="relative w-32 h-32 mx-auto flex items-center justify-center">
+                    <div className="absolute inset-0 rounded-full bg-accentPinkLight animate-ping opacity-75"></div>
+                    <div className="w-28 h-28 rounded-full bg-cardBg border-2 border-accentPink shadow-floating flex items-center justify-center text-4xl relative z-10">
+                      🌿
+                    </div>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-textMain">音声通話ルーム</h2>
+                    <p className="text-xs text-textSub mt-1">みんなでおしゃべり 👤 12人</p>
+                  </div>
+                  {isCallTime && (
+                    <div className="inline-block bg-accentPinkLight text-accentPink text-xs px-3 py-1 rounded-full font-bold">
+                      ☀️ 昼の通話タイム中 (12:00〜12:30)
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-4 mb-10">
+                  <div className="flex justify-center gap-4">
+                    <button
+                      onClick={() => setIsMicOn(!isMicOn)}
+                      className={`flex-1 py-3.5 rounded-2xl text-xs font-bold shadow-soft border transition flex flex-col items-center gap-1 ${
+                        isMicOn ? 'bg-cardBg text-textMain border-borderSoft' : 'bg-gray-200 text-textSub'
+                      }`}
+                    >
+                      <span className="text-lg">{isMicOn ? '🎤' : '🎙️'}</span>
+                      <span>{isMicOn ? 'マイク ON' : 'マイク OFF'}</span>
+                    </button>
+                    <button
+                      onClick={() => setIsMuted(!isMuted)}
+                      className={`flex-1 py-3.5 rounded-2xl text-xs font-bold shadow-soft border transition flex flex-col items-center gap-1 ${
+                        !isMuted ? 'bg-cardBg text-textMain border-borderSoft' : 'bg-gray-200 text-textSub'
+                      }`}
+                    >
+                      <span className="text-lg">{!isMuted ? '🔊' : '🔇'}</span>
+                      <span>{!isMuted ? '消音モード' : '消音中'}</span>
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setCurrentTab('home')}
+                    className="w-full bg-accentPink text-white py-3.5 rounded-2xl text-xs font-bold shadow-soft hover:bg-accentPinkHover transition"
+                  >
+                    通話を終了する
+                  </button>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* 下部ナビゲーション */}
+          <nav className="fixed bottom-0 max-w-md w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-2.5 px-2 z-40 shadow-floating">
+            <button
+              onClick={() => setCurrentTab('home')}
+              className={`flex flex-col items-center gap-0.5 text-[10px] font-bold transition ${currentTab === 'home' ? 'text-accentPink' : 'text-textSub'}`}
+            >
+              <span className="text-lg">🏠</span>
+              <span>ホーム</span>
+            </button>
+
+            <button
+              onClick={() => setCurrentTab('chat')}
+              className={`flex flex-col items-center gap-0.5 text-[10px] font-bold transition ${currentTab === 'chat' ? 'text-accentPink' : 'text-textSub'}`}
+            >
+              <span className="text-lg">💬</span>
+              <span>チャット</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (userProfile?.role === 'admin' || userProfile?.role === 'sub_admin') setIsRoomModalOpen(true);
+                else alert('ルームの追加は管理者・副管理者のみ可能です。');
+              }}
+              className="w-10 h-10 rounded-full bg-badgeBg flex items-center justify-center font-bold text-textMain shadow-soft hover:bg-gray-200 transition"
+            >
+              ＋
+            </button>
+
+            <button className="flex flex-col items-center gap-0.5 text-[10px] font-bold text-textSub opacity-50 cursor-not-allowed">
+              <span className="text-lg">😊</span>
+              <span>スタンプ</span>
+            </button>
+
+            <button className="flex flex-col items-center gap-0.5 text-[10px] font-bold text-textSub opacity-50 cursor-not-allowed">
+              <span className="text-lg">👤</span>
+              <span>マイページ</span>
+            </button>
+          </nav>
+
+          {/* ルーム追加モーダル */}
+          {isRoomModalOpen && (
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+              <div className="bg-cardBg rounded-3xl w-full max-w-sm p-5 space-y-4 shadow-floating border border-borderSoft">
+                <div className="flex justify-between items-center border-b border-borderSoft pb-3">
+                  <h3 className="font-bold text-xs text-textMain">ルーム追加（管理者専用）</h3>
+                  <button onClick={() => setIsRoomModalOpen(false)} className="text-xs text-textSub font-bold">✕</button>
+                </div>
+                <form onSubmit={handleCreateRoom} className="space-y-2.5">
+                  <input
+                    type="text"
+                    placeholder="部屋の名前 (例: 趣味の部屋)"
+                    value={newRoomName}
+                    onChange={(e) => setNewRoomName(e.target.value)}
+                    className="w-full text-xs p-3 border border-borderSoft rounded-xl focus:outline-none focus:border-accentPink bg-bgMain"
+                  />
+                  <input
+                    type="text"
+                    placeholder="説明 (例: 好きなアニメや漫画について話そう)"
+                    value={newRoomDesc}
+                    onChange={(e) => setNewRoomDesc(e.target.value)}
+                    className="w-full text-xs p-3 border border-borderSoft rounded-xl focus:outline-none focus:border-accentPink bg-bgMain"
+                  />
+                  <button type="submit" className="w-full bg-accentPink text-white text-xs py-3 rounded-xl font-bold shadow-soft hover:bg-accentPinkHover transition">
+                    作成する
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
