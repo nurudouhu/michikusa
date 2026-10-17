@@ -44,17 +44,11 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       -webkit-tap-highlight-color: transparent;
     }
-    ::-webkit-scrollbar {
-      width: 3px;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: #E08A85;
-      border-radius: 10px;
-    }
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-thumb { background: #E08A85; border-radius: 10px; }
   </style>
 </head>
 <body class="flex justify-center bg-gray-100 min-h-screen items-center p-0 md:p-4">
-  <!-- 縦幅と外枠のコンパクト化 -->
   <div id="root" class="w-full max-w-sm bg-bgMain h-[90vh] max-h-[700px] shadow-xl rounded-3xl relative flex flex-col overflow-hidden border border-borderSoft"></div>
 
   <script type="text/babel">
@@ -71,6 +65,25 @@
       { id: 'room-relax', name: 'ゆっくり部屋', description: 'なにもしなくてもいい、のんびり過ごす場所 🍵' }
     ];
 
+  const STAMP_LIST = [
+  { id: 'yahho', name: 'やっほー', url: 'stamp1.png' },
+  { id: 'arigato', name: 'ありがとう', url: 'stamp2.png' },
+  { id: 'tsukareta', name: 'つかれた…', url: 'stamp3.png' },
+  { id: 'un', name: 'うーん？', url: 'stamp4.png' },
+  { id: 'ganbaro', name: 'がんばろう！', url: 'stamp5.png' },
+  { id: 'ehehe', name: 'えへへ', url: 'stamp6.png' },
+  { id: 'daisuki', name: 'だいすき♡', url: 'stamp7.png' },
+  { id: 'oyasumi', name: 'おやすみ', url: 'stamp8.png' },
+  { id: 'e', name: 'えっ！', url: 'stamp9.png' },
+  { id: 'hitoiki', name: 'ほっとひと息', url: 'stamp10.png' },
+  { id: 'tasukaru', name: 'たすかる！', url: 'stamp11.png' },
+  { id: 'ittekimasu', name: 'いってきます', url: 'stamp12.png' },
+  { id: 'iine', name: 'いいね！', url: 'stamp13.png' },
+  { id: 'nemui', name: 'ねむい…', url: 'stamp14.png' },
+  { id: 'nonbiri', name: 'のんびり', url: 'stamp15.png' },
+  { id: 'matane', name: 'またね♡', url: 'stamp16.png' }
+];
+
     const NG_WORDS = ['死ね', '殺す', 'きもい', 'うざい', 'キモイ', 'ウザい', '馬鹿', 'バカ', 'アホ'];
     const PHONE_REGEX = /0\d{1,4}-?\d{1,4}-?\d{3,4}/;
     const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
@@ -85,14 +98,12 @@
       const [inputText, setInputText] = useState('');
       const [blockedUsers, setBlockedUsers] = useState([]);
       const [isNightRestricted, setIsNightRestricted] = useState(false);
-      const [isCallTime, setIsCallTime] = useState(false);
-      const [isMicOn, setIsMicOn] = useState(true);
-      const [isMuted, setIsMuted] = useState(false);
       const [isEditingProfile, setIsEditingProfile] = useState(false);
       const [newUsername, setNewUsername] = useState('');
       const [isRoomModalOpen, setIsRoomModalOpen] = useState(false);
       const [newRoomName, setNewRoomName] = useState('');
       const [newRoomDesc, setNewRoomDesc] = useState('');
+      const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
 
       const messagesEndRef = useRef(null);
 
@@ -109,9 +120,7 @@
         const jstHour = (now.getUTCHours() + 9) % 24;
         const jstMin = now.getUTCMinutes();
         const totalMinutes = jstHour * 60 + jstMin;
-
         setIsNightRestricted(totalMinutes >= 1290 || totalMinutes < 390);
-        setIsCallTime(jstHour === 12 && jstMin <= 30);
       }
 
       async function initAuth() {
@@ -121,7 +130,7 @@
             setCurrentUser(session.user);
             fetchProfile(session.user.id);
           } else {
-            const { data, error } = await supabase.auth.signInAnonymously();
+            const { data } = await supabase.auth.signInAnonymously();
             if (data?.user) {
               setCurrentUser(data.user);
               fetchProfile(data.user.id);
@@ -139,9 +148,7 @@
 
       async function fetchRooms() {
         const { data } = await supabase.from('rooms').select('*').order('created_at', { ascending: true });
-        if (data && data.length > 0) {
-          setRooms(data);
-        }
+        if (data && data.length > 0) setRooms(data);
       }
 
       useEffect(() => {
@@ -184,56 +191,47 @@
           }
         }
         if (PHONE_REGEX.test(text) || EMAIL_REGEX.test(text)) {
-          alert('個人情報（電話番号やメールアドレス）は送信できません。');
+          alert('個人情報は送信できません。');
           return false;
         }
         return true;
       }
 
-      async function handleSendMessage(e) {
-        e.preventDefault();
-        if (!inputText.trim() || isNightRestricted || !currentUser) return;
-        if (!validateInput(inputText)) return;
+      async function handleSendMessage(e, customContent = null) {
+        if (e) e.preventDefault();
+        const contentToSend = customContent || inputText;
+        if (!contentToSend.trim() || isNightRestricted || !currentUser) return;
+        if (!customContent && !validateInput(contentToSend)) return;
 
-        const text = inputText;
-        setInputText('');
+        if (!customContent) setInputText('');
         
         const { error } = await supabase.from('messages').insert({
           room_id: selectedRoom.id,
           user_id: currentUser.id,
-          content: text
+          content: contentToSend
         });
 
         if (error) {
           alert('送信できませんでした: ' + error.message);
+        } else {
+          setIsStampPickerOpen(false);
         }
+      }
+
+      // スタンプ送信処理
+      function handleSendStamp(stamp) {
+        if (!selectedRoom) {
+          alert('先にチャットルームを選択してください 🌱');
+          return;
+        }
+        const stampMsg = `[STAMP_IMG:${stamp.url}]`;
+        handleSendMessage(null, stampMsg);
       }
 
       async function handleDeleteMessage(messageId) {
         if (confirm('このメッセージを削除しますか？')) {
-          const { error } = await supabase.from('messages').delete().eq('id', messageId);
-          if (error) alert('削除に失敗しました: ' + error.message);
-          else fetchMessages();
-        }
-      }
-
-      function handleMention(username) {
-        if (!username) return;
-        setInputText((prev) => `@${username} ${prev}`);
-      }
-
-      async function handleBlockUser(targetUserId) {
-        if (confirm('このユーザーをブロックしますか？')) {
-          await supabase.from('blocks').insert({ blocker_id: currentUser.id, blocked_id: targetUserId });
-          setBlockedUsers(prev => [...prev, targetUserId]);
-        }
-      }
-
-      async function handleReportMessage(messageId) {
-        const reason = prompt('通報理由を入力してください:');
-        if (reason) {
-          await supabase.from('reports').insert({ reporter_id: currentUser.id, message_id: messageId, reason: reason });
-          alert('通報を受け付けました。');
+          await supabase.from('messages').delete().eq('id', messageId);
+          fetchMessages();
         }
       }
 
@@ -243,17 +241,6 @@
         setUserProfile({ ...userProfile, username: newUsername });
         setIsEditingProfile(false);
       }
-
-      async function handleCreateRoom(e) {
-        e.preventDefault();
-        if (!newRoomName.trim()) return;
-        await supabase.from('rooms').insert({ name: newRoomName, description: newRoomDesc, created_by: userProfile.id });
-        setNewRoomName(''); setNewRoomDesc('');
-        fetchRooms();
-        setIsRoomModalOpen(false);
-      }
-
-      const isAdmin = userProfile?.role === 'admin' || userProfile?.role === 'sub_admin';
 
       return (
         <div className="flex flex-col h-full relative">
@@ -269,20 +256,16 @@
                     </div>
                     <p className="text-[10px] text-textSub">話すたび、少しだけ前を向ける場所。</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button className="w-7 h-7 rounded-full bg-cardBg flex items-center justify-center shadow-soft text-textSub text-xs">🔍</button>
-                    <button className="w-7 h-7 rounded-full bg-cardBg flex items-center justify-center shadow-soft text-textSub text-xs">🔔</button>
-                    <div
-                      onClick={() => { setNewUsername(userProfile?.username || ''); setIsEditingProfile(true); }}
-                      className="w-8 h-8 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-xs cursor-pointer shadow-soft"
-                    >
-                      {userProfile?.username?.substring(0, 1) || '道'}
-                    </div>
+                  <div
+                    onClick={() => { setNewUsername(userProfile?.username || ''); setIsEditingProfile(true); }}
+                    className="w-8 h-8 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-xs cursor-pointer"
+                  >
+                    {userProfile?.username?.substring(0, 1) || '道'}
                   </div>
                 </header>
 
                 {isEditingProfile && (
-                  <div className="p-2.5 bg-cardBg rounded-xl shadow-floating border border-accentPink/30 flex gap-2 items-center">
+                  <div className="p-2.5 bg-cardBg rounded-xl border border-accentPink/30 flex gap-2 items-center">
                     <input
                       type="text"
                       value={newUsername}
@@ -295,45 +278,8 @@
                   </div>
                 )}
 
-                <div className="bg-cardBg rounded-xl p-2.5 shadow-soft border border-borderSoft flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-badgeBg flex items-center justify-center text-xs">📣</div>
-                    <div>
-                      <p className="text-xs font-bold text-textMain">管理人からのお知らせ</p>
-                      <p className="text-[10px] text-textSub">みんなで楽しく過ごしましょう🌱</p>
-                    </div>
-                  </div>
-                  <span className="text-textSub text-xs">＞</span>
-                </div>
-
                 <div>
-                  <h2 className="text-[11px] font-bold text-textSub mb-1.5 px-1">今の通話</h2>
-                  <div
-                    onClick={() => setCurrentTab('call')}
-                    className="bg-cardBg rounded-xl p-3 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentPink transition"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded-xl bg-accentPinkLight text-accentPink flex items-center justify-center text-base">
-                        🎙️
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <p className="text-xs font-bold text-accentPink">ただいま 通話中</p>
-                          <span className="w-1.5 h-1.5 rounded-full bg-accentPink animate-ping"></span>
-                        </div>
-                        <p className="text-[10px] text-textSub">みんなでおしゃべり（音声のみ）</p>
-                      </div>
-                    </div>
-                    <div className="bg-badgeBg px-2 py-0.5 rounded-full text-[10px] text-textSub font-bold">
-                      👤 12人 ＞
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex justify-between items-center mb-1.5 px-1">
-                    <h2 className="text-[11px] font-bold text-textSub">参加中のルーム</h2>
-                  </div>
+                  <h2 className="text-[11px] font-bold text-textSub mb-1.5 px-1">参加中のルーム</h2>
                   <div className="space-y-2">
                     {rooms.map((room) => (
                       <div
@@ -342,9 +288,7 @@
                         className="bg-cardBg rounded-xl p-2.5 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentPink/60 transition"
                       >
                         <div className="flex items-center gap-2.5">
-                          <div className="w-9 h-9 rounded-xl bg-badgeBg flex items-center justify-center text-sm border border-borderSoft">
-                            💬
-                          </div>
+                          <div className="w-9 h-9 rounded-xl bg-badgeBg flex items-center justify-center text-sm border border-borderSoft">💬</div>
                           <div>
                             <p className="text-xs font-bold text-textMain">{room.name}</p>
                             <p className="text-[10px] text-textSub">{room.description}</p>
@@ -362,26 +306,16 @@
             {currentTab === 'chat' && (
               <div className="flex flex-col h-full bg-bgMain">
                 <header className="bg-cardBg px-3 py-2.5 border-b border-borderSoft flex justify-between items-center sticky top-0 z-10 shadow-soft">
-                  <button onClick={() => setCurrentTab('home')} className="text-xs font-bold text-accentPink">
-                    ＜ 戻る
-                  </button>
-                  <div className="text-center">
-                    <h2 className="font-bold text-xs text-textMain">{selectedRoom?.name || 'チャット'}</h2>
-                  </div>
+                  <button onClick={() => setCurrentTab('home')} className="text-xs font-bold text-accentPink">＜ 戻る</button>
+                  <h2 className="font-bold text-xs text-textMain">{selectedRoom?.name || 'チャット'}</h2>
                   <div className="w-6" />
                 </header>
-
-                {isNightRestricted && (
-                  <div className="bg-accentPinkLight text-accentPink text-[10px] p-2 text-center font-bold">
-                    🌙 ただいまお休み時間です (21:30 〜 06:30 は投稿できません)
-                  </div>
-                )}
 
                 <div className="flex-1 overflow-y-auto p-3 space-y-3">
                   {messages.filter(m => !blockedUsers.includes(m.user_id)).map((msg) => {
                     const isMe = msg.user_id === currentUser?.id;
-                    const isOwnerOrAdmin = isMe || isAdmin;
                     const username = msg.profile?.username || 'ユーザー';
+                    const isStamp = msg.content.startsWith('[STAMP_IMG:');
 
                     return (
                       <div key={msg.id} className={`flex gap-2 ${isMe ? 'flex-row-reverse' : ''}`}>
@@ -391,30 +325,27 @@
                         <div className={`max-w-[75%] ${isMe ? 'items-end' : ''}`}>
                           <div className="flex items-center gap-1.5 mb-0.5 px-1">
                             <span className="text-[9px] text-textSub font-bold">{username}</span>
-                            {!isMe && (
-                              <button onClick={() => handleMention(username)} className="text-[9px] text-accentPink hover:underline">
-                                @返信
-                              </button>
-                            )}
                           </div>
-                          <div className={`p-2.5 rounded-xl text-xs leading-relaxed shadow-soft ${
-                            isMe ? 'bg-accentPink text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
-                          }`}>
-                            {msg.content}
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col justify-end gap-1 text-[10px] opacity-40 hover:opacity-100 transition px-0.5">
-                          {isOwnerOrAdmin && (
-                            <button onClick={() => handleDeleteMessage(msg.id)} title="削除">🗑️</button>
-                          )}
-                          {!isMe && (
-                            <>
-                              <button onClick={() => handleReportMessage(msg.id)} title="通報">🚨</button>
-                              <button onClick={() => handleBlockUser(msg.user_id)} title="ブロック">🚫</button>
-                            </>
+                          {isStamp ? (
+                            (() => {
+                              const imgUrl = msg.content.replace('[STAMP_IMG:', '').replace(']', '');
+                              return (
+                                <div className="p-1 inline-block">
+                                  <img src={imgUrl} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            <div className={`p-2.5 rounded-xl text-xs leading-relaxed shadow-soft ${
+                              isMe ? 'bg-accentPink text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
+                            }`}>
+                              {msg.content}
+                            </div>
                           )}
                         </div>
+                        {isMe && (
+                          <button onClick={() => handleDeleteMessage(msg.id)} className="text-[10px] opacity-40 hover:opacity-100 self-end">🗑️</button>
+                        )}
                       </div>
                     );
                   })}
@@ -440,56 +371,34 @@
                 </form>
               </div>
             )}
-
-            {/* 音声通話画面 */}
-            {currentTab === 'call' && (
-              <div className="flex flex-col h-full bg-bgMain p-4 justify-between">
-                <button onClick={() => setCurrentTab('home')} className="text-xs font-bold text-accentPink self-start">＜ 戻る</button>
-
-                <div className="text-center space-y-3">
-                  <div className="w-20 h-20 rounded-full bg-cardBg border-2 border-accentPink shadow-floating flex items-center justify-center text-2xl mx-auto">
-                    🌿
-                  </div>
-                  <div>
-                    <h2 className="text-base font-bold text-textMain">音声通話ルーム</h2>
-                    <p className="text-[10px] text-textSub mt-0.5">みんなでおしゃべり 👤 12人</p>
-                  </div>
-                </div>
-
-                <div className="space-y-3 mb-6">
-                  <div className="flex justify-center gap-2">
-                    <button
-                      onClick={() => setIsMicOn(!isMicOn)}
-                      className={`flex-1 py-2.5 rounded-xl text-xs font-bold shadow-soft border ${
-                        isMicOn ? 'bg-cardBg text-textMain' : 'bg-gray-200 text-textSub'
-                      }`}
-                    >
-                      {isMicOn ? '🎤 マイクON' : '🎙️ マイクOFF'}
-                    </button>
-                    <button
-                      onClick={() => setIsMuted(!isMuted)}
-                      className={`flex-1 py-2.5 rounded-xl text-xs font-bold shadow-soft border ${
-                        !isMuted ? 'bg-cardBg text-textMain' : 'bg-gray-200 text-textSub'
-                      }`}
-                    >
-                      {!isMuted ? '🔊 消音OFF' : '🔇 消音中'}
-                    </button>
-                  </div>
-                  <button
-                    onClick={() => setCurrentTab('home')}
-                    className="w-full bg-accentPink text-white py-2.5 rounded-xl text-xs font-bold shadow-soft"
-                  >
-                    通話を終了する
-                  </button>
-                </div>
-              </div>
-            )}
           </main>
 
+          {/* スタンプ選択パネル */}
+          {isStampPickerOpen && (
+            <div className="absolute bottom-12 inset-x-0 bg-cardBg border-t border-borderSoft p-3 rounded-t-2xl shadow-floating z-30">
+              <div className="flex justify-between items-center mb-2 px-1">
+                <span className="text-xs font-bold text-textMain">スタンプを選択</span>
+                <button onClick={() => setIsStampPickerOpen(false)} className="text-xs text-textSub">✕ 閉じる</button>
+              </div>
+              <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1">
+                {STAMP_LIST.map((stamp) => (
+                  <button
+                    key={stamp.id}
+                    onClick={() => handleSendStamp(stamp)}
+                    className="p-1 border border-borderSoft rounded-xl hover:bg-bgMain transition flex flex-col items-center justify-center bg-white"
+                  >
+                    <img src={stamp.url} alt={stamp.name} className="w-14 h-14 object-contain" />
+                    <span className="text-[9px] text-textSub mt-1">{stamp.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* 下部ナビゲーション */}
-          <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-1.5 z-40 shadow-floating">
+          <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-1.5 z-40">
             <button
-              onClick={() => setCurrentTab('home')}
+              onClick={() => { setCurrentTab('home'); setIsStampPickerOpen(false); }}
               className={`flex flex-col items-center text-[9px] font-bold ${currentTab === 'home' ? 'text-accentPink' : 'text-textSub'}`}
             >
               <span className="text-base">🏠</span>
@@ -497,7 +406,7 @@
             </button>
 
             <button
-              onClick={() => setCurrentTab('chat')}
+              onClick={() => { setCurrentTab('chat'); setIsStampPickerOpen(false); }}
               className={`flex flex-col items-center text-[9px] font-bold ${currentTab === 'chat' ? 'text-accentPink' : 'text-textSub'}`}
             >
               <span className="text-base">💬</span>
@@ -505,56 +414,13 @@
             </button>
 
             <button
-              onClick={() => {
-                if (isAdmin) setIsRoomModalOpen(true);
-                else alert('ルームの追加は管理者・副管理者のみ可能です。');
-              }}
-              className="w-8 h-8 rounded-full bg-badgeBg flex items-center justify-center font-bold text-textMain text-sm shadow-soft"
+              onClick={() => setIsStampPickerOpen(!isStampPickerOpen)}
+              className={`flex flex-col items-center text-[9px] font-bold transition ${isStampPickerOpen ? 'text-accentPink' : 'text-textSub'}`}
             >
-              ＋
-            </button>
-
-            <button className="flex flex-col items-center text-[9px] font-bold text-textSub opacity-50 cursor-not-allowed">
               <span className="text-base">😊</span>
               <span>スタンプ</span>
             </button>
-
-            <button className="flex flex-col items-center text-[9px] font-bold text-textSub opacity-50 cursor-not-allowed">
-              <span className="text-base">👤</span>
-              <span>マイページ</span>
-            </button>
           </nav>
-
-          {/* ルーム追加モーダル */}
-          {isRoomModalOpen && (
-            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-              <div className="bg-cardBg rounded-2xl w-full max-w-xs p-4 space-y-3 shadow-floating border">
-                <div className="flex justify-between items-center border-b pb-2">
-                  <h3 className="font-bold text-xs">ルーム追加（管理者）</h3>
-                  <button onClick={() => setIsRoomModalOpen(false)} className="text-xs">✕</button>
-                </div>
-                <form onSubmit={handleCreateRoom} className="space-y-2">
-                  <input
-                    type="text"
-                    placeholder="部屋の名前"
-                    value={newRoomName}
-                    onChange={(e) => setNewRoomName(e.target.value)}
-                    className="w-full text-xs p-2 border rounded-lg bg-bgMain"
-                  />
-                  <input
-                    type="text"
-                    placeholder="説明"
-                    value={newRoomDesc}
-                    onChange={(e) => setNewRoomDesc(e.target.value)}
-                    className="w-full text-xs p-2 border rounded-lg bg-bgMain"
-                  />
-                  <button type="submit" className="w-full bg-accentPink text-white text-xs py-2 rounded-lg font-bold">
-                    作成する
-                  </button>
-                </form>
-              </div>
-            </div>
-          )}
         </div>
       );
     }
