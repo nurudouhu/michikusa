@@ -160,6 +160,7 @@
       }, [selectedRoom, currentUser, currentTab]);
 
       async function fetchMessages() {
+        if (!selectedRoom) return;
         const { data } = await supabase
           .from('messages')
           .select('*, profile:profiles(*)')
@@ -172,6 +173,7 @@
       }
 
       async function fetchBlockedUsers() {
+        if (!currentUser) return;
         const { data } = await supabase.from('blocks').select('blocked_id').eq('blocker_id', currentUser.id);
         if (data) setBlockedUsers(data.map(b => b.blocked_id));
       }
@@ -192,11 +194,11 @@
 
       async function handleSendMessage(e, customContent = null) {
         if (e) e.preventDefault();
-        const contentToSend = customContent || inputText;
-        if (!contentToSend.trim() || isNightRestricted || !currentUser || !selectedRoom) return;
-        if (!customContent && !validateInput(contentToSend)) return;
+        const contentToSend = customContent !== null ? customContent : inputText;
+        if (!contentToSend || !contentToSend.trim() || isNightRestricted || !currentUser || !selectedRoom) return;
+        if (customContent === null && !validateInput(contentToSend)) return;
 
-        if (!customContent) setInputText('');
+        if (customContent === null) setInputText('');
         
         const { error } = await supabase.from('messages').insert({
           room_id: selectedRoom.id,
@@ -208,6 +210,7 @@
           alert('送信できませんでした: ' + error.message);
         } else {
           setIsStampPickerOpen(false);
+          fetchMessages();
         }
       }
 
@@ -265,6 +268,7 @@
                         key={room.id}
                         onClick={() => {
                           setSelectedRoom(room);
+                          setInputText(''); // 部屋移動時にテキストをクリア
                           setCurrentTab('chat');
                           setIsStampPickerOpen(false);
                         }}
@@ -289,7 +293,7 @@
             {currentTab === 'chat' && (
               <div className="flex flex-col h-full bg-bgMain">
                 <header className="bg-cardBg px-3 py-2.5 border-b border-borderSoft flex justify-between items-center sticky top-0 z-10 shadow-soft">
-                  <button onClick={() => { setCurrentTab('home'); setIsStampPickerOpen(false); }} className="text-xs font-bold text-accentPink">＜ 部屋一覧</button>
+                  <button onClick={() => { setSelectedRoom(null); setInputText(''); setCurrentTab('home'); setIsStampPickerOpen(false); }} className="text-xs font-bold text-accentPink">＜ 部屋一覧</button>
                   <h2 className="font-bold text-xs text-textMain">{selectedRoom?.name || 'チャット'}</h2>
                   <div className="w-8" />
                 </header>
