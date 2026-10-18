@@ -54,7 +54,6 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // ★★★ ご自身の Supabase 情報に書き換えてください ★★★
     const SUPABASE_URL = 'https://tmujuurcxptdqgcprpqu.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtdWp1dXJjeHB0ZHFnY3BycHF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxOTU1MTMsImV4cCI6MjEwNzc3MTUxM30.TJJsag5UetFYOzqQ02wMM73Lg0M6ut_aszxvi9hZEdA';
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -65,7 +64,6 @@
       { id: 'room-relax', name: 'ゆっくり部屋', description: 'なにもしなくてもいい、のんびり過ごす場所 🍵' }
     ];
 
-    // スタンプファイル一覧（stamp1.png 〜 stamp16.png）
     const STAMP_LIST = [
       { id: 'yahho', name: 'やっほー', url: 'stamp1.png' },
       { id: 'arigato', name: 'ありがとう', url: 'stamp2.png' },
@@ -85,7 +83,7 @@
     const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
     function App() {
-      const [currentTab, setCurrentTab] = useState('home');
+      const [currentTab, setCurrentTab] = useState('home'); // 'home' | 'profile' | 'chat'
       const [selectedRoom, setSelectedRoom] = useState(null);
       const [currentUser, setCurrentUser] = useState(null);
       const [userProfile, setUserProfile] = useState(null);
@@ -94,7 +92,6 @@
       const [inputText, setInputText] = useState('');
       const [blockedUsers, setBlockedUsers] = useState([]);
       const [isNightRestricted, setIsNightRestricted] = useState(false);
-      const [isEditingProfile, setIsEditingProfile] = useState(false);
       const [newUsername, setNewUsername] = useState('');
       const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
 
@@ -136,7 +133,10 @@
 
       async function fetchProfile(userId) {
         const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-        if (data) setUserProfile(data);
+        if (data) {
+          setUserProfile(data);
+          setNewUsername(data.username || '');
+        }
       }
 
       async function fetchRooms() {
@@ -145,7 +145,7 @@
       }
 
       useEffect(() => {
-        if (!currentUser || !selectedRoom) return;
+        if (!currentUser || !selectedRoom || currentTab !== 'chat') return;
         fetchMessages();
         fetchBlockedUsers();
 
@@ -157,7 +157,7 @@
           .subscribe();
 
         return () => { supabase.removeChannel(channel); };
-      }, [selectedRoom, currentUser]);
+      }, [selectedRoom, currentUser, currentTab]);
 
       async function fetchMessages() {
         const { data } = await supabase
@@ -193,7 +193,7 @@
       async function handleSendMessage(e, customContent = null) {
         if (e) e.preventDefault();
         const contentToSend = customContent || inputText;
-        if (!contentToSend.trim() || isNightRestricted || !currentUser) return;
+        if (!contentToSend.trim() || isNightRestricted || !currentUser || !selectedRoom) return;
         if (!customContent && !validateInput(contentToSend)) return;
 
         if (!customContent) setInputText('');
@@ -212,10 +212,7 @@
       }
 
       function handleSendStamp(stamp) {
-        if (!selectedRoom) {
-          alert('先にチャットルームを選択してください 🌱');
-          return;
-        }
+        if (!selectedRoom) return;
         const stampMsg = `[STAMP_IMG:${stamp.url}]`;
         handleSendMessage(null, stampMsg);
       }
@@ -229,15 +226,19 @@
 
       async function handleUpdateProfile() {
         if (!newUsername.trim() || !userProfile) return;
-        await supabase.from('profiles').update({ username: newUsername }).eq('id', userProfile.id);
-        setUserProfile({ ...userProfile, username: newUsername });
-        setIsEditingProfile(false);
+        const { error } = await supabase.from('profiles').update({ username: newUsername }).eq('id', userProfile.id);
+        if (error) {
+          alert('プロフィールの更新に失敗しました');
+        } else {
+          setUserProfile({ ...userProfile, username: newUsername });
+          alert('プロフィールを変更しました！');
+        }
       }
 
       return (
         <div className="flex flex-col h-full relative">
-          <main className="flex-1 overflow-y-auto pb-14">
-            {/* ホーム画面 */}
+          <main className="flex-1 overflow-y-auto pb-16">
+            {/* ① ホーム画面（部屋選択） */}
             {currentTab === 'home' && (
               <div className="p-3.5 space-y-4">
                 <header className="flex justify-between items-center pt-1">
@@ -249,44 +250,34 @@
                     <p className="text-[10px] text-textSub">話すたび、少しだけ前を向ける場所。</p>
                   </div>
                   <div
-                    onClick={() => { setNewUsername(userProfile?.username || ''); setIsEditingProfile(true); }}
-                    className="w-8 h-8 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-xs cursor-pointer"
+                    onClick={() => setCurrentTab('profile')}
+                    className="w-8 h-8 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-xs cursor-pointer shadow-soft"
                   >
                     {userProfile?.username?.substring(0, 1) || '道'}
                   </div>
                 </header>
 
-                {isEditingProfile && (
-                  <div className="p-2.5 bg-cardBg rounded-xl border border-accentPink/30 flex gap-2 items-center">
-                    <input
-                      type="text"
-                      value={newUsername}
-                      onChange={(e) => setNewUsername(e.target.value)}
-                      className="flex-1 text-xs border border-borderSoft p-1.5 rounded-lg focus:outline-none"
-                      placeholder="新しいニックネーム"
-                    />
-                    <button onClick={handleUpdateProfile} className="bg-accentPink text-white px-2.5 py-1.5 rounded-lg text-xs font-bold">保存</button>
-                    <button onClick={() => setIsEditingProfile(false)} className="text-xs text-textSub">取消</button>
-                  </div>
-                )}
-
                 <div>
-                  <h2 className="text-[11px] font-bold text-textSub mb-1.5 px-1">参加中のルーム</h2>
-                  <div className="space-y-2">
+                  <h2 className="text-[11px] font-bold text-textSub mb-2 px-1">部屋を選んで参加する</h2>
+                  <div className="space-y-2.5">
                     {rooms.map((room) => (
                       <div
                         key={room.id}
-                        onClick={() => { setSelectedRoom(room); setCurrentTab('chat'); }}
-                        className="bg-cardBg rounded-xl p-2.5 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentPink/60 transition"
+                        onClick={() => {
+                          setSelectedRoom(room);
+                          setCurrentTab('chat');
+                          setIsStampPickerOpen(false);
+                        }}
+                        className="bg-cardBg rounded-2xl p-3 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentPink/60 transition active:scale-[0.98]"
                       >
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-9 h-9 rounded-xl bg-badgeBg flex items-center justify-center text-sm border border-borderSoft">💬</div>
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-badgeBg flex items-center justify-center text-base border border-borderSoft shrink-0">💬</div>
                           <div>
                             <p className="text-xs font-bold text-textMain">{room.name}</p>
-                            <p className="text-[10px] text-textSub">{room.description}</p>
+                            <p className="text-[10px] text-textSub mt-0.5">{room.description}</p>
                           </div>
                         </div>
-                        <span className="text-textSub text-xs">＞</span>
+                        <span className="text-accentPink text-xs font-bold ml-2">入る ＞</span>
                       </div>
                     ))}
                   </div>
@@ -294,13 +285,13 @@
               </div>
             )}
 
-            {/* チャット画面 */}
+            {/* ② チャットスレッド画面 */}
             {currentTab === 'chat' && (
               <div className="flex flex-col h-full bg-bgMain">
                 <header className="bg-cardBg px-3 py-2.5 border-b border-borderSoft flex justify-between items-center sticky top-0 z-10 shadow-soft">
-                  <button onClick={() => setCurrentTab('home')} className="text-xs font-bold text-accentPink">＜ 戻る</button>
+                  <button onClick={() => { setCurrentTab('home'); setIsStampPickerOpen(false); }} className="text-xs font-bold text-accentPink">＜ 部屋一覧</button>
                   <h2 className="font-bold text-xs text-textMain">{selectedRoom?.name || 'チャット'}</h2>
-                  <div className="w-6" />
+                  <div className="w-8" />
                 </header>
 
                 <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -344,7 +335,16 @@
                   <div ref={messagesEndRef} />
                 </div>
 
+                {/* メッセージ・スタンプ入力エリア */}
                 <form onSubmit={handleSendMessage} className="p-2 bg-cardBg border-t border-borderSoft flex gap-1.5 items-center">
+                  <button
+                    type="button"
+                    onClick={() => setIsStampPickerOpen(!isStampPickerOpen)}
+                    className={`w-8 h-8 rounded-full border border-borderSoft flex items-center justify-center text-sm transition ${isStampPickerOpen ? 'bg-accentPinkLight border-accentPink text-accentPink' : 'bg-bgMain text-textSub'}`}
+                    title="スタンプ"
+                  >
+                    😊
+                  </button>
                   <input
                     type="text"
                     disabled={isNightRestricted}
@@ -356,17 +356,57 @@
                   <button
                     type="submit"
                     disabled={isNightRestricted || !inputText.trim()}
-                    className="w-8 h-8 rounded-full bg-accentPink text-white flex items-center justify-center text-xs font-bold disabled:opacity-40"
+                    className="w-8 h-8 rounded-full bg-accentPink text-white flex items-center justify-center text-xs font-bold disabled:opacity-40 shrink-0"
                   >
                     ➔
                   </button>
                 </form>
               </div>
             )}
+
+            {/* ③ プロフィール変更画面 */}
+            {currentTab === 'profile' && (
+              <div className="p-4 space-y-4">
+                <header className="border-b border-borderSoft pb-2.5">
+                  <h1 className="text-base font-bold text-textMain">プロフィール設定</h1>
+                  <p className="text-[10px] text-textSub mt-0.5">チャットで表示される名前を設定できます。</p>
+                </header>
+
+                <div className="bg-cardBg rounded-2xl p-4 shadow-soft border border-borderSoft space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-base">
+                      {newUsername?.substring(0, 1) || '道'}
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-textSub">現在のアイコン</p>
+                      <p className="text-xs font-bold text-textMain">{userProfile?.username || 'ユーザー'}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1 pt-2">
+                    <label className="text-[11px] font-bold text-textSub block">ニックネーム</label>
+                    <input
+                      type="text"
+                      value={newUsername}
+                      onChange={(e) => setNewUsername(e.target.value)}
+                      className="w-full text-xs border border-borderSoft p-2.5 rounded-xl focus:outline-none focus:border-accentPink"
+                      placeholder="新しいニックネームを入力"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleUpdateProfile}
+                    className="w-full bg-accentPink hover:bg-accentPinkHover text-white py-2.5 rounded-xl text-xs font-bold transition shadow-soft mt-2"
+                  >
+                    保存する
+                  </button>
+                </div>
+              </div>
+            )}
           </main>
 
-          {/* スタンプ選択パネル */}
-          {isStampPickerOpen && (
+          {/* チャット内スタンプ選択パネル */}
+          {currentTab === 'chat' && isStampPickerOpen && (
             <div className="absolute bottom-12 inset-x-0 bg-cardBg border-t border-borderSoft p-3 rounded-t-2xl shadow-floating z-30">
               <div className="flex justify-between items-center mb-2 px-1">
                 <span className="text-xs font-bold text-textMain">スタンプを選択</span>
@@ -387,30 +427,22 @@
             </div>
           )}
 
-          {/* 下部ナビゲーション */}
-          <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-1.5 z-40">
+          {/* 下部ナビゲーションバー（ホーム / プロフィール） */}
+          <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-2 z-40 shadow-soft">
             <button
               onClick={() => { setCurrentTab('home'); setIsStampPickerOpen(false); }}
-              className={`flex flex-col items-center text-[9px] font-bold ${currentTab === 'home' ? 'text-accentPink' : 'text-textSub'}`}
+              className={`flex flex-col items-center text-[10px] font-bold transition ${currentTab === 'home' || currentTab === 'chat' ? 'text-accentPink' : 'text-textSub'}`}
             >
-              <span className="text-base">🏠</span>
+              <span className="text-base mb-0.5">🏠</span>
               <span>ホーム</span>
             </button>
 
             <button
-              onClick={() => { setCurrentTab('chat'); setIsStampPickerOpen(false); }}
-              className={`flex flex-col items-center text-[9px] font-bold ${currentTab === 'chat' ? 'text-accentPink' : 'text-textSub'}`}
+              onClick={() => { setCurrentTab('profile'); setIsStampPickerOpen(false); }}
+              className={`flex flex-col items-center text-[10px] font-bold transition ${currentTab === 'profile' ? 'text-accentPink' : 'text-textSub'}`}
             >
-              <span className="text-base">💬</span>
-              <span>チャット</span>
-            </button>
-
-            <button
-              onClick={() => setIsStampPickerOpen(!isStampPickerOpen)}
-              className={`flex flex-col items-center text-[9px] font-bold transition ${isStampPickerOpen ? 'text-accentPink' : 'text-textSub'}`}
-            >
-              <span className="text-base">😊</span>
-              <span>スタンプ</span>
+              <span className="text-base mb-0.5">👤</span>
+              <span>プロフィール</span>
             </button>
           </nav>
         </div>
