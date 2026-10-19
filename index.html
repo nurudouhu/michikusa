@@ -83,7 +83,7 @@
     const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
     function App() {
-      const [currentTab, setCurrentTab] = useState('home'); // 'home' | 'profile' | 'chat'
+      const [currentTab, setCurrentTab] = useState('home');
       const [selectedRoom, setSelectedRoom] = useState(null);
       const [currentUser, setCurrentUser] = useState(null);
       const [userProfile, setUserProfile] = useState(null);
@@ -95,7 +95,7 @@
       const [newUsername, setNewUsername] = useState('');
       const [newBio, setNewBio] = useState('');
       const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
-      const [viewingProfile, setViewingProfile] = useState(null); // プロフカード表示用
+      const [viewingProfile, setViewingProfile] = useState(null);
 
       const messagesEndRef = useRef(null);
 
@@ -118,14 +118,16 @@
       async function initAuth() {
         try {
           const { data: { session } } = await supabase.auth.getSession();
-          if (session) {
+          if (session?.user) {
             setCurrentUser(session.user);
-            fetchProfile(session.user.id);
+            await ensureProfile(session.user.id);
           } else {
-            const { data } = await supabase.auth.signInAnonymously();
+            const { data, error } = await supabase.auth.signInAnonymously();
             if (data?.user) {
               setCurrentUser(data.user);
-              fetchProfile(data.user.id);
+              await ensureProfile(data.user.id);
+            } else if (error) {
+              console.error("Auth signin error:", error);
             }
           }
         } catch (err) {
@@ -133,9 +135,22 @@
         }
       }
 
-      async function fetchProfile(userId) {
-        const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-        if (data) {
+      // プロフィールが存在するか確認し、なければ作成する
+      async function ensureProfile(userId) {
+        let { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+        if (!data) {
+          const defaultName = 'お名前未設定_' + userId.substring(0, 4);
+          const { data: newProf, error: insError } = await supabase
+            .from('profiles')
+            .insert({ id: userId, username: defaultName, bio: '' })
+            .select()
+            .single();
+          if (newProf) {
+            setUserProfile(newProf);
+            setNewUsername(newProf.username);
+            setNewBio(newProf.bio || '');
+          }
+        } else {
           setUserProfile(data);
           setNewUsername(data.username || '');
           setNewBio(data.bio || '');
@@ -231,14 +246,16 @@
       }
 
       async function handleUpdateProfile() {
-        if (!newUsername.trim() || !userProfile) return;
-        const { error } = await supabase.from('profiles').update({ 
+        if (!newUsername.trim() || !userProfile || !currentUser) return;
+        
+        const { error } = await supabase.from('profiles').upsert({ 
+          id: currentUser.id,
           username: newUsername,
           bio: newBio 
-        }).eq('id', userProfile.id);
+        });
 
         if (error) {
-          alert('プロフィールの更新に失敗しました');
+          alert('プロフィールの更新に失敗しました: ' + error.message);
         } else {
           setUserProfile({ ...userProfile, username: newUsername, bio: newBio });
           alert('プロフィールを保存しました！');
@@ -252,7 +269,7 @@
       return (
         <div className="flex flex-col h-full relative">
           <main className="flex-1 overflow-y-auto pb-16">
-            {/* ① ホーム画面（部屋選択） */}
+            {/* ① ホーム画面 */}
             {currentTab === 'home' && (
               <div className="p-3.5 space-y-4">
                 <header className="flex justify-between items-center pt-1">
@@ -317,7 +334,6 @@
 
                     return (
                       <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
-                        {/* アイコンタップでプロフカードを表示 */}
                         <div 
                           onClick={() => setViewingProfile(msg.profile)}
                           className="w-7 h-7 rounded-full bg-badgeBg border border-borderSoft flex items-center justify-center font-bold text-[10px] shrink-0 text-textSub mb-1 cursor-pointer hover:border-accentPink"
@@ -360,7 +376,6 @@
                   <div ref={messagesEndRef} />
                 </div>
 
-                {/* メッセージ・スタンプ入力エリア */}
                 <form onSubmit={handleSendMessage} className="p-2 bg-cardBg border-t border-borderSoft flex gap-1.5 items-center">
                   <button
                     type="button"
@@ -389,7 +404,7 @@
               </div>
             )}
 
-            {/* ③ プロフィール変更・プロフカード設定画面 */}
+            {/* ③ プロフィール設定画面 */}
             {currentTab === 'profile' && (
               <div className="p-4 space-y-4">
                 <header className="border-b border-borderSoft pb-2.5">
@@ -441,7 +456,7 @@
             )}
           </main>
 
-          {/* 他ユーザーのプロフカード表示モーダル */}
+          {/* プロフカード表示モーダル */}
           {viewingProfile && (
             <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
               <div className="bg-cardBg w-full max-w-xs rounded-2xl p-4 shadow-floating border border-borderSoft space-y-3">
@@ -469,7 +484,7 @@
                     handleMention(viewingProfile.username);
                     setViewingProfile(null);
                   }}
-                  className="w-full bg-badge-bg border border-borderSoft hover:border-accentPink text-textMain py-2 rounded-xl text-xs font-bold transition"
+                  className="w-full bg-badgeBg border border-borderSoft hover:border-accentPink text-textMain py-2 rounded-xl text-xs font-bold transition"
                 >
                   @ メンションを送る
                 </button>
@@ -499,7 +514,7 @@
             </div>
           )}
 
-          {/* 下部ナビゲーションバー（ホーム / プロフィール） */}
+          {/* 下部ナビゲーション */}
           <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-2 z-40 shadow-soft">
             <button
               onClick={() => { setCurrentTab('home'); setIsStampPickerOpen(false); setViewingProfile(null); }}
