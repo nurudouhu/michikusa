@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>道クサ - みんなの居場所</title>
+  <title>道クサ</title>
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Supabase JS (CDN) -->
@@ -19,19 +19,19 @@
       theme: {
         extend: {
           colors: {
-            bgMain: '#F8F6F0',
-            cardBg: '#FFFFFF',
-            accentPink: '#E08A85',
-            accentPinkHover: '#D07671',
-            accentPinkLight: '#FDF2F1',
-            textMain: '#3A3A3A',
-            textSub: '#8C8A85',
-            badgeBg: '#F2F0E9',
-            borderSoft: '#EFECE6'
+            bgMain: '#F7F5F0',       // ベージュ
+            cardBg: '#FFFFFF',       // 白
+            textMain: '#1A1A1A',     // メインの黒
+            textSub: '#737373',      // 補足のグレー
+            accentBlue: '#6B7C93',   // 薄い灰青（くすみブルー）
+            accentBlueLight: '#EBF0F5', // 薄い灰青の背景用
+            badgeBg: '#EAE8E3',      // 薄いベージュグレー
+            borderSoft: '#E5E2DC',   // 柔らかい境界線
+            msgBlack: '#262626'      // 自分の吹き出し用黒
           },
           boxShadow: {
-            soft: '0 2px 10px -1px rgba(0, 0, 0, 0.04)',
-            floating: '0 4px 20px rgba(0, 0, 0, 0.08)'
+            soft: '0 2px 8px rgba(0, 0, 0, 0.04)',
+            floating: '0 4px 16px rgba(0, 0, 0, 0.08)'
           }
         }
       }
@@ -39,16 +39,16 @@
   </script>
   <style>
     body {
-      background-color: #F8F6F0;
-      color: #3A3A3A;
+      background-color: #F7F5F0;
+      color: #1A1A1A;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       -webkit-tap-highlight-color: transparent;
     }
     ::-webkit-scrollbar { width: 3px; }
-    ::-webkit-scrollbar-thumb { background: #E08A85; border-radius: 10px; }
+    ::-webkit-scrollbar-thumb { background: #6B7C93; border-radius: 10px; }
   </style>
 </head>
-<body class="flex justify-center bg-gray-100 min-h-screen items-center p-0 md:p-4">
+<body class="flex justify-center bg-gray-200 min-h-screen items-center p-0 md:p-4">
   <div id="root" class="w-full max-w-sm bg-bgMain h-[90vh] max-h-[700px] shadow-xl rounded-3xl relative flex flex-col overflow-hidden border border-borderSoft"></div>
 
   <script type="text/babel">
@@ -59,9 +59,9 @@
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     const DEFAULT_ROOMS = [
-      { id: 'room-study', name: '勉強部屋', description: '自分のペースで静かに集中しよう 📚' },
-      { id: 'room-chat', name: '雑談部屋', description: '好きなお話や今日のできごとなど 💬' },
-      { id: 'room-relax', name: 'ゆっくり部屋', description: 'なにもしなくてもいい、のんびり過ごす場所 🍵' }
+      { id: 'room-study', name: '勉強部屋', description: '自分のペースで静かに集中しよう' },
+      { id: 'room-chat', name: '雑談部屋', description: '好きなお話や今日のできごとなど' },
+      { id: 'room-relax', name: 'ゆっくり部屋', description: 'なにもしなくてもいい、のんびり過ごす場所' }
     ];
 
     const STAMP_LIST = [
@@ -69,13 +69,13 @@
       { id: 'arigato', name: 'ありがとう', url: 'stamp2.png' },
       { id: 'ganbaro', name: 'がんばろう！', url: 'stamp5.png' },
       { id: 'ehehe', name: 'えへへ', url: 'stamp6.png' },
-      { id: 'daisuki', name: 'だいすき♡', url: 'stamp7.png' },
+      { id: 'daisuki', name: 'だいすき', url: 'stamp7.png' },
       { id: 'oyasumi', name: 'おやすみ', url: 'stamp8.png' },
       { id: 'e', name: 'えっ！', url: 'stamp9.png' },
       { id: 'hitoiki', name: 'ほっとひと息', url: 'stamp10.png' },
       { id: 'iine', name: 'いいね！', url: 'stamp13.png' },
       { id: 'nemui', name: 'ねむい…', url: 'stamp14.png' },
-      { id: 'matane', name: 'またね♡', url: 'stamp16.png' }
+      { id: 'matane', name: 'またね', url: 'stamp16.png' }
     ];
 
     const NG_WORDS = ['死ね', '殺す', 'きもい', 'うざい', 'キモイ', 'ウザい', '馬鹿', 'バカ', 'アホ'];
@@ -135,12 +135,11 @@
         }
       }
 
-      // プロフィールが存在するか確認し、なければ作成する
       async function ensureProfile(userId) {
-        let { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+        let { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
         if (!data) {
-          const defaultName = 'お名前未設定_' + userId.substring(0, 4);
-          const { data: newProf, error: insError } = await supabase
+          const defaultName = '未設定_' + userId.substring(0, 4);
+          const { data: newProf } = await supabase
             .from('profiles')
             .insert({ id: userId, username: defaultName, bio: '' })
             .select()
@@ -258,285 +257,8 @@
           alert('プロフィールの更新に失敗しました: ' + error.message);
         } else {
           setUserProfile({ ...userProfile, username: newUsername, bio: newBio });
-          alert('プロフィールを保存しました！');
+          alert('プロフィールを保存しました');
         }
       }
 
-      function handleMention(username) {
-        setInputText(prev => prev + `@${username} `);
-      }
-
-      return (
-        <div className="flex flex-col h-full relative">
-          <main className="flex-1 overflow-y-auto pb-16">
-            {/* ① ホーム画面 */}
-            {currentTab === 'home' && (
-              <div className="p-3.5 space-y-4">
-                <header className="flex justify-between items-center pt-1">
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <h1 className="text-xl font-black text-textMain tracking-wider">道 ク サ</h1>
-                      <span className="text-base">🌿</span>
-                    </div>
-                    <p className="text-[10px] text-textSub">話すたび、少しだけ前を向ける場所。</p>
-                  </div>
-                  <div
-                    onClick={() => setCurrentTab('profile')}
-                    className="w-8 h-8 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-xs cursor-pointer shadow-soft"
-                  >
-                    {userProfile?.username?.substring(0, 1) || '道'}
-                  </div>
-                </header>
-
-                <div>
-                  <h2 className="text-[11px] font-bold text-textSub mb-2 px-1">部屋を選んで参加する</h2>
-                  <div className="space-y-2.5">
-                    {rooms.map((room) => (
-                      <div
-                        key={room.id}
-                        onClick={() => {
-                          setSelectedRoom(room);
-                          setInputText('');
-                          setCurrentTab('chat');
-                          setIsStampPickerOpen(false);
-                        }}
-                        className="bg-cardBg rounded-2xl p-3 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentPink/60 transition active:scale-[0.98]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-badgeBg flex items-center justify-center text-base border border-borderSoft shrink-0">💬</div>
-                          <div>
-                            <p className="text-xs font-bold text-textMain">{room.name}</p>
-                            <p className="text-[10px] text-textSub mt-0.5">{room.description}</p>
-                          </div>
-                        </div>
-                        <span className="text-accentPink text-xs font-bold ml-2">入る ＞</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ② チャットスレッド画面 */}
-            {currentTab === 'chat' && (
-              <div className="flex flex-col h-full bg-bgMain">
-                <header className="bg-cardBg px-3 py-2.5 border-b border-borderSoft flex justify-between items-center sticky top-0 z-10 shadow-soft">
-                  <button onClick={() => { setSelectedRoom(null); setInputText(''); setCurrentTab('home'); setIsStampPickerOpen(false); }} className="text-xs font-bold text-accentPink">＜ 部屋一覧</button>
-                  <h2 className="font-bold text-xs text-textMain">{selectedRoom?.name || 'チャット'}</h2>
-                  <div className="w-8" />
-                </header>
-
-                <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                  {messages.filter(m => !blockedUsers.includes(m.user_id)).map((msg) => {
-                    const isMe = msg.user_id === currentUser?.id;
-                    const username = msg.profile?.username || 'ユーザー';
-                    const isStamp = msg.content.startsWith('[STAMP_IMG:');
-
-                    return (
-                      <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
-                        <div 
-                          onClick={() => setViewingProfile(msg.profile)}
-                          className="w-7 h-7 rounded-full bg-badgeBg border border-borderSoft flex items-center justify-center font-bold text-[10px] shrink-0 text-textSub mb-1 cursor-pointer hover:border-accentPink"
-                        >
-                          {username.substring(0, 1)}
-                        </div>
-                        <div className={`flex flex-col max-w-[70%] ${isMe ? 'items-end' : 'items-start'}`}>
-                          <div className="flex items-center gap-1.5 mb-0.5 px-1">
-                            <span 
-                              onClick={() => handleMention(username)} 
-                              className="text-[9px] text-textSub font-bold cursor-pointer hover:text-accentPink"
-                              title="クリックしてメンション"
-                            >
-                              {username}
-                            </span>
-                          </div>
-                          {isStamp ? (
-                            (() => {
-                              const imgUrl = msg.content.replace('[STAMP_IMG:', '').replace(']', '');
-                              return (
-                                <div className="p-1 inline-block">
-                                  <img src={imgUrl} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
-                                </div>
-                              );
-                            })()
-                          ) : (
-                            <div className={`inline-block p-2.5 rounded-xl text-xs leading-relaxed shadow-soft break-words w-fit ${
-                              isMe ? 'bg-accentPink text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
-                            }`}>
-                              {msg.content}
-                            </div>
-                          )}
-                        </div>
-                        {isMe && (
-                          <button onClick={() => handleDeleteMessage(msg.id)} className="text-[10px] opacity-40 hover:opacity-100 mb-2">🗑️</button>
-                        )}
-                      </div>
-                    );
-                  })}
-                  <div ref={messagesEndRef} />
-                </div>
-
-                <form onSubmit={handleSendMessage} className="p-2 bg-cardBg border-t border-borderSoft flex gap-1.5 items-center">
-                  <button
-                    type="button"
-                    onClick={() => setIsStampPickerOpen(!isStampPickerOpen)}
-                    className={`w-8 h-8 rounded-full border border-borderSoft flex items-center justify-center text-sm transition ${isStampPickerOpen ? 'bg-accentPinkLight border-accentPink text-accentPink' : 'bg-bgMain text-textSub'}`}
-                    title="スタンプ"
-                  >
-                    😊
-                  </button>
-                  <input
-                    type="text"
-                    disabled={isNightRestricted}
-                    placeholder={isNightRestricted ? 'お休み時間中 🌙' : 'メッセージを入力...'}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    className="flex-1 bg-bgMain rounded-full px-3 py-1.5 text-xs border border-borderSoft focus:outline-none focus:border-accentPink disabled:bg-gray-100"
-                  />
-                  <button
-                    type="submit"
-                    disabled={isNightRestricted || !inputText.trim()}
-                    className="w-8 h-8 rounded-full bg-accentPink text-white flex items-center justify-center text-xs font-bold disabled:opacity-40 shrink-0"
-                  >
-                    ➔
-                  </button>
-                </form>
-              </div>
-            )}
-
-            {/* ③ プロフィール設定画面 */}
-            {currentTab === 'profile' && (
-              <div className="p-4 space-y-4">
-                <header className="border-b border-borderSoft pb-2.5">
-                  <h1 className="text-base font-bold text-textMain">プロフィール設定</h1>
-                  <p className="text-[10px] text-textSub mt-0.5">名前や自己紹介（プロフカード）を設定できます。</p>
-                </header>
-
-                <div className="bg-cardBg rounded-2xl p-4 shadow-soft border border-borderSoft space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-base">
-                      {newUsername?.substring(0, 1) || '道'}
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-textSub">プレビュー</p>
-                      <p className="text-xs font-bold text-textMain">{newUsername || 'ユーザー'}</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1 pt-1">
-                    <label className="text-[11px] font-bold text-textSub block">ニックネーム</label>
-                    <input
-                      type="text"
-                      value={newUsername}
-                      onChange={(e) => setNewUsername(e.target.value)}
-                      className="w-full text-xs border border-borderSoft p-2.5 rounded-xl focus:outline-none focus:border-accentPink"
-                      placeholder="ニックネームを入力"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-textSub block">自己紹介（プロフカード）</label>
-                    <textarea
-                      value={newBio}
-                      onChange={(e) => setNewBio(e.target.value)}
-                      rows="3"
-                      className="w-full text-xs border border-borderSoft p-2.5 rounded-xl focus:outline-none focus:border-accentPink resize-none"
-                      placeholder="好きなことや趣味などを書いてね（例：読書が好きです📚）"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleUpdateProfile}
-                    className="w-full bg-accentPink hover:bg-accentPinkHover text-white py-2.5 rounded-xl text-xs font-bold transition shadow-soft mt-2"
-                  >
-                    保存する
-                  </button>
-                </div>
-              </div>
-            )}
-          </main>
-
-          {/* プロフカード表示モーダル */}
-          {viewingProfile && (
-            <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-              <div className="bg-cardBg w-full max-w-xs rounded-2xl p-4 shadow-floating border border-borderSoft space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-bold text-textSub">プロフカード</span>
-                  <button onClick={() => setViewingProfile(null)} className="text-xs text-textSub font-bold">✕ 閉じる</button>
-                </div>
-                <div className="flex items-center gap-3 pt-1">
-                  <div className="w-12 h-12 rounded-full bg-accentPinkLight border-2 border-accentPink text-accentPink flex items-center justify-center font-bold text-base shrink-0">
-                    {viewingProfile.username?.substring(0, 1) || '道'}
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-textMain">{viewingProfile.username || 'ユーザー'}</h3>
-                    <p className="text-[10px] text-textSub">道クサメンバー 🌱</p>
-                  </div>
-                </div>
-                <div className="bg-bgMain p-3 rounded-xl border border-borderSoft min-h-[60px]">
-                  <p className="text-[10px] text-textSub mb-1 font-bold">自己紹介</p>
-                  <p className="text-xs text-textMain leading-relaxed whitespace-pre-wrap">
-                    {viewingProfile.bio || '自己紹介はまだ書かれていません。'}
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    handleMention(viewingProfile.username);
-                    setViewingProfile(null);
-                  }}
-                  className="w-full bg-badgeBg border border-borderSoft hover:border-accentPink text-textMain py-2 rounded-xl text-xs font-bold transition"
-                >
-                  @ メンションを送る
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* チャット内スタンプ選択パネル */}
-          {currentTab === 'chat' && isStampPickerOpen && (
-            <div className="absolute bottom-12 inset-x-0 bg-cardBg border-t border-borderSoft p-3 rounded-t-2xl shadow-floating z-30">
-              <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-xs font-bold text-textMain">スタンプを選択</span>
-                <button onClick={() => setIsStampPickerOpen(false)} className="text-xs text-textSub">✕ 閉じる</button>
-              </div>
-              <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1">
-                {STAMP_LIST.map((stamp) => (
-                  <button
-                    key={stamp.id}
-                    onClick={() => handleSendStamp(stamp)}
-                    className="p-1 border border-borderSoft rounded-xl hover:bg-bgMain transition flex flex-col items-center justify-center bg-white"
-                  >
-                    <img src={stamp.url} alt={stamp.name} className="w-14 h-14 object-contain" />
-                    <span className="text-[9px] text-textSub mt-1">{stamp.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 下部ナビゲーション */}
-          <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-2 z-40 shadow-soft">
-            <button
-              onClick={() => { setCurrentTab('home'); setIsStampPickerOpen(false); setViewingProfile(null); }}
-              className={`flex flex-col items-center text-[10px] font-bold transition ${currentTab === 'home' || currentTab === 'chat' ? 'text-accentPink' : 'text-textSub'}`}
-            >
-              <span className="text-base mb-0.5">🏠</span>
-              <span>ホーム</span>
-            </button>
-
-            <button
-              onClick={() => { setCurrentTab('profile'); setIsStampPickerOpen(false); setViewingProfile(null); }}
-              className={`flex flex-col items-center text-[10px] font-bold transition ${currentTab === 'profile' ? 'text-accentPink' : 'text-textSub'}`}
-            >
-              <span className="text-base mb-0.5">👤</span>
-              <span>プロフィール</span>
-            </button>
-          </nav>
-        </div>
-      );
-    }
-
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-  </script>
-</body>
-</html>
+      function handleMention(
