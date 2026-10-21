@@ -131,7 +131,7 @@
         setIsNightRestricted(totalMinutes >= 1290 || totalMinutes < 390);
 
         // お昼休み音声通話 (12:00〜12:30 = 720分〜750分)
-        setIsLunchTimeCall(true);
+      setIsLunchTimeCall(totalMinutes >= 720 && totalMinutes < 750);
 
         // 放課後勉強会 (16:00〜17:00 = 960分〜1020分)
         setIsStudyCall(totalMinutes >= 960 && totalMinutes < 1020);
