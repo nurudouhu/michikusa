@@ -95,33 +95,46 @@
       const [messages, setMessages] = useState([]);
       const [inputText, setInputText] = useState('');
       const [blockedUsers, setBlockedUsers] = useState([]);
-      const [isNightRestricted, setIsNightRestricted] = useState(false);
-      const [isBanned, setIsBanned] = useState(false); // 通報累積によるアクセス制限
+      
+      // 時間モード管理
+      const [isNightRestricted, setIsNightRestricted] = useState(false); // 21:30〜6:30
+      const [isLunchTimeCall, setIsLunchTimeCall] = useState(false);     // 12:00〜12:30 (お昼休み通話)
+      const [isStudyCall, setIsStudyCall] = useState(false);             // 16:00〜17:00 (勉強会通話・勉強部屋限定)
+      const [isMicMuted, setIsMicMuted] = useState(true);                // 音声通話のマイクミュート状態
+
+      const [isBanned, setIsBanned] = useState(false);
       const [newUsername, setNewUsername] = useState('');
       const [newBio, setNewBio] = useState('');
       const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
       const [viewingProfile, setViewingProfile] = useState(null);
       
-      // 上部通知（メンション受け取り時）
       const [notification, setNotification] = useState(null);
       const longPressTimer = useRef(null);
-
       const messagesEndRef = useRef(null);
 
       useEffect(() => {
         initAuth();
         fetchRooms();
         checkTimeRestrictions();
-        const interval = setInterval(checkTimeRestrictions, 60000);
+        const interval = setInterval(checkTimeRestrictions, 30000);
         return () => clearInterval(interval);
       }, []);
 
+      // 時間判定ロジック
       function checkTimeRestrictions() {
         const now = new Date();
         const jstHour = (now.getUTCHours() + 9) % 24;
         const jstMin = now.getUTCMinutes();
         const totalMinutes = jstHour * 60 + jstMin;
+
+        // 夜間お休み (21:30 = 21*60+30 = 1290分 ～ 06:30 = 390分)
         setIsNightRestricted(totalMinutes >= 1290 || totalMinutes < 390);
+
+        // お昼休み音声通話 (12:00〜12:30 = 720分〜750分)
+        setIsLunchTimeCall(totalMinutes >= 720 && totalMinutes < 750);
+
+        // 放課後勉強会 (16:00〜17:00 = 960分〜1020分)
+        setIsStudyCall(totalMinutes >= 960 && totalMinutes < 1020);
       }
 
       async function initAuth() {
@@ -144,9 +157,8 @@
         }
       }
 
-      // 通報累積（2回以上）でチャット制限
       async function checkBanStatus(userId) {
-        const { data, error } = await supabase.from('reports').select('id').eq('reported_id', userId);
+        const { data } = await supabase.from('reports').select('id').eq('reported_id', userId);
         if (data && data.length >= 2) {
           setIsBanned(true);
         }
@@ -187,7 +199,6 @@
           .channel(`room-${selectedRoom.id}`)
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, (payload) => {
             fetchMessages();
-            // 自分の名前へのメンションがあれば上部に2秒間通知表示
             if (userProfile?.username && payload.new.content.includes(`@${userProfile.username}`)) {
               showNotification(`メッセージが届きました`);
             }
@@ -202,9 +213,7 @@
 
       function showNotification(text) {
         setNotification(text);
-        setTimeout(() => {
-          setNotification(null);
-        }, 2000); // 2秒後に自動消去
+        setTimeout(() => { setNotification(null); }, 2000);
       }
 
       async function fetchMessages() {
@@ -243,7 +252,9 @@
       async function handleSendMessage(e, customContent = null) {
         if (e) e.preventDefault();
         const contentToSend = customContent !== null ? customContent : inputText;
-        if (!contentToSend || !contentToSend.trim() || isNightRestricted || !currentUser || !selectedRoom || isBanned) return;
+        // お昼休み通話中、勉強会通話中（勉強部屋）、夜間はチャット送信不可
+        const isInCallMode = isLunchTimeCall || (isStudyCall && selectedRoom?.id === 'room-study');
+        if (!contentToSend || !contentToSend.trim() || isNightRestricted || isInCallMode || !currentUser || !selectedRoom || isBanned) return;
         if (customContent === null && !validateInput(contentToSend)) return;
 
         if (customContent === null) setInputText('');
@@ -254,9 +265,7 @@
           content: contentToSend
         });
 
-        if (error) {
-          alert('送信できませんでした: ' + error.message);
-        } else {
+        if (!error) {
           setIsStampPickerOpen(false);
           fetchMessages();
         }
@@ -275,35 +284,21 @@
         }
       }
 
-      // ブロック処理
       async function handleBlockUser(targetUserId) {
         if (!currentUser || targetUserId === currentUser.id) return;
-        if (confirm('このユーザーをブロックしますか？（相手のコメントが非表示になります）')) {
-          await supabase.from('blocks').insert({
-            blocker_id: currentUser.id,
-            blocked_id: targetUserId
-          });
+        if (confirm('このユーザーをブロックしますか？')) {
+          await supabase.from('blocks').insert({ blocker_id: currentUser.id, blocked_id: targetUserId });
           setViewingProfile(null);
           await fetchBlockedUsers();
           alert('ブロックしました');
         }
       }
 
-      // 通報処理（自動的にブロックも同時に実行）
       async function handleReportUser(targetUserId) {
         if (!currentUser || targetUserId === currentUser.id) return;
-        if (confirm('このユーザーを通報しますか？（自動的にブロックも適用されます）')) {
-          // 通報レコードを追加
-          await supabase.from('reports').insert({
-            reporter_id: currentUser.id,
-            reported_id: targetUserId,
-            reason: 'ユーザー通報'
-          });
-          // 同時にブロック
-          await supabase.from('blocks').insert({
-            blocker_id: currentUser.id,
-            blocked_id: targetUserId
-          });
+        if (confirm('このユーザーを通報しますか？（同時にブロックも適用されます）')) {
+          await supabase.from('reports').insert({ reporter_id: currentUser.id, reported_id: targetUserId, reason: 'ユーザー通報' });
+          await supabase.from('blocks').insert({ blocker_id: currentUser.id, blocked_id: targetUserId });
           setViewingProfile(null);
           await fetchBlockedUsers();
           alert('通報とブロックが完了しました');
@@ -312,13 +307,7 @@
 
       async function handleUpdateProfile() {
         if (!newUsername.trim() || !userProfile || !currentUser) return;
-        
-        const { error } = await supabase.from('profiles').upsert({ 
-          id: currentUser.id,
-          username: newUsername,
-          bio: newBio 
-        });
-
+        const { error } = await supabase.from('profiles').upsert({ id: currentUser.id, username: newUsername, bio: newBio });
         if (error) {
           alert('プロフィールの更新に失敗しました: ' + error.message);
         } else {
@@ -331,21 +320,17 @@
         setInputText(prev => prev + `@${username} `);
       }
 
-      // 長押し（Long Press）対応
       function handleTouchStart(username) {
         longPressTimer.current = setTimeout(() => {
           handleMention(username);
-          if (navigator.vibrate) navigator.vibrate(50); // バイブレーションフィードバック
-        }, 500); // 0.5秒長押しで返信（メンション）
+          if (navigator.vibrate) navigator.vibrate(50);
+        }, 500);
       }
 
       function handleTouchEnd() {
-        if (longPressTimer.current) {
-          clearTimeout(longPressTimer.current);
-        }
+        if (longPressTimer.current) clearTimeout(longPressTimer.current);
       }
 
-      // 利用制限（BAN）されている場合
       if (isBanned) {
         return (
           <div className="flex flex-col items-center justify-center h-full p-6 text-center bg-cardBg">
@@ -357,9 +342,11 @@
         );
       }
 
+      // 現在の部屋で通話モードが発動しているか判定
+      const activeCallMode = isLunchTimeCall ? 'lunch' : (isStudyCall && selectedRoom?.id === 'room-study' ? 'study' : null);
+
       return (
         <div className="flex flex-col h-full relative">
-          {/* 上部通知（メンション着信時・2秒間表示） */}
           {notification && (
             <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-textMain text-white text-[11px] font-bold px-4 py-2 rounded-full shadow-floating z-50 animate-bounce">
               {notification}
@@ -409,101 +396,132 @@
               </div>
             )}
 
-            {/* ② チャット画面 */}
+            {/* ② チャット ＆ 音声通話画面 */}
             {currentTab === 'chat' && (
               <div className="flex flex-col h-full bg-bgMain">
                 <header className="bg-cardBg px-3 py-2.5 border-b border-borderSoft flex justify-between items-center sticky top-0 z-10 shadow-soft">
                   <button onClick={() => { setSelectedRoom(null); setInputText(''); setCurrentTab('home'); setIsStampPickerOpen(false); }} className="text-xs font-bold text-accentBlue">＜ 部屋一覧</button>
-                  <h2 className="font-bold text-xs text-textMain">{selectedRoom?.name || 'チャット'}</h2>
+                  <h2 className="font-bold text-xs text-textMain">
+                    {selectedRoom?.name} 
+                    {activeCallMode === 'lunch' && ' (お昼休み通話中)'}
+                    {activeCallMode === 'study' && ' (勉強会通話中)'}
+                  </h2>
                   <div className="w-8" />
                 </header>
 
-                <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                  {messages.filter(m => !blockedUsers.includes(m.user_id)).map((msg) => {
-                    const isMe = msg.user_id === currentUser?.id;
-                    const username = msg.profile?.username || 'ユーザー';
-                    const isStamp = msg.content.startsWith('[STAMP_IMG:');
+                {/* 音声通話モード中の表示 */}
+                {activeCallMode ? (
+                  <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4 bg-cardBg m-3 rounded-2xl border border-borderSoft shadow-soft">
+                    <div className="w-16 h-16 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-xl shadow-soft">
+                      {activeCallMode === 'lunch' ? '話' : '学'}
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-bold text-textMain mb-1">
+                        {activeCallMode === 'lunch' ? 'お昼休み音声通話の時間です' : '放課後勉強会の時間です'}
+                      </h3>
+                      <p className="text-[10px] text-textSub leading-relaxed">
+                        {activeCallMode === 'lunch' 
+                          ? '12:00〜12:30の間は、チャットがお休みになりみんなで音声通話を楽しめます。' 
+                          : '16:00〜17:00の間は、勉強部屋でみんなと声を繋いで集中します。'}
+                      </p>
+                    </div>
 
-                    return (
-                      <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
-                        <div 
-                          onClick={() => setViewingProfile(msg.profile)}
-                          className="w-7 h-7 rounded-full bg-badgeBg border border-borderSoft flex items-center justify-center font-bold text-[10px] shrink-0 text-textSub mb-1 cursor-pointer hover:border-accentBlue"
-                        >
-                          {username.substring(0, 1)}
-                        </div>
-                        <div className={`flex flex-col max-w-[70%] ${isMe ? 'items-end' : 'items-start'}`}>
-                          <div className="flex items-center gap-1.5 mb-0.5 px-1">
-                            <span 
-                              onClick={() => handleMention(username)} 
-                              className="text-[9px] text-textSub font-bold cursor-pointer hover:text-accentBlue"
-                            >
-                              {username}
-                            </span>
+                    {/* マイクON/OFFボタンUI */}
+                    <div className="pt-2">
+                      <button
+                        onClick={() => setIsMicMuted(!isMicMuted)}
+                        className={`px-5 py-2.5 rounded-full text-xs font-bold transition shadow-soft flex items-center gap-2 ${
+                          isMicMuted ? 'bg-gray-200 text-textSub border border-borderSoft' : 'bg-accentBlue text-white'
+                        }`}
+                      >
+                        <span>●</span>
+                        <span>{isMicMuted ? 'マイク OFF (ミュート)' : 'マイク ON (発話中)'}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* 通常チャット画面 */
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                    {messages.filter(m => !blockedUsers.includes(m.user_id)).map((msg) => {
+                      const isMe = msg.user_id === currentUser?.id;
+                      const username = msg.profile?.username || 'ユーザー';
+                      const isStamp = msg.content.startsWith('[STAMP_IMG:');
+
+                      return (
+                        <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
+                          <div 
+                            onClick={() => setViewingProfile(msg.profile)}
+                            className="w-7 h-7 rounded-full bg-badgeBg border border-borderSoft flex items-center justify-center font-bold text-[10px] shrink-0 text-textSub mb-1 cursor-pointer hover:border-accentBlue"
+                          >
+                            {username.substring(0, 1)}
                           </div>
-                          {isStamp ? (
-                            (() => {
-                              const imgUrl = msg.content.replace('[STAMP_IMG:', '').replace(']', '');
-                              return (
-                                <div 
-                                  onTouchStart={() => handleTouchStart(username)}
-                                  onTouchEnd={handleTouchEnd}
-                                  onMouseDown={() => handleTouchStart(username)}
-                                  onMouseUp={handleTouchEnd}
-                                  className="p-1 inline-block cursor-pointer select-none"
-                                >
-                                  <img src={imgUrl} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
-                                </div>
-                              );
-                            })()
-                          ) : (
-                            <div 
-                              onTouchStart={() => handleTouchStart(username)}
-                              onTouchEnd={handleTouchEnd}
-                              onMouseDown={() => handleTouchStart(username)}
-                              onMouseUp={handleTouchEnd}
-                              title="長押しで返信"
-                              className={`inline-block p-2.5 rounded-xl text-xs leading-relaxed shadow-soft break-words w-fit cursor-pointer select-none active:opacity-80 ${
-                                isMe ? 'bg-msgBlack text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
-                              }`}
-                            >
-                              {msg.content}
+                          <div className={`flex flex-col max-w-[70%] ${isMe ? 'items-end' : 'items-start'}`}>
+                            <div className="flex items-center gap-1.5 mb-0.5 px-1">
+                              <span 
+                                onClick={() => handleMention(username)} 
+                                className="text-[9px] text-textSub font-bold cursor-pointer hover:text-accentBlue"
+                              >
+                                {username}
+                              </span>
                             </div>
+                            {isStamp ? (
+                              <div 
+                                onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
+                                onMouseDown={() => handleTouchStart(username)} onMouseUp={handleTouchEnd}
+                                className="p-1 inline-block cursor-pointer select-none"
+                              >
+                                <img src={msg.content.replace('[STAMP_IMG:', '').replace(']', '')} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
+                              </div>
+                            ) : (
+                              <div 
+                                onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
+                                onMouseDown={() => handleTouchStart(username)} onMouseUp={handleTouchEnd}
+                                title="長押しで返信"
+                                className={`inline-block p-2.5 rounded-xl text-xs leading-relaxed shadow-soft break-words w-fit cursor-pointer select-none active:opacity-80 ${
+                                  isMe ? 'bg-msgBlack text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
+                                }`}
+                              >
+                                {msg.content}
+                              </div>
+                            )}
+                          </div>
+                          {isMe && (
+                            <button onClick={() => handleDeleteMessage(msg.id)} className="text-[10px] text-textSub opacity-40 hover:opacity-100 mb-2 font-bold">×</button>
                           )}
                         </div>
-                        {isMe && (
-                          <button onClick={() => handleDeleteMessage(msg.id)} className="text-[10px] text-textSub opacity-40 hover:opacity-100 mb-2 font-bold">×</button>
-                        )}
-                      </div>
-                    );
-                  })}
-                  <div ref={messagesEndRef} />
-                </div>
+                      );
+                    })}
+                    <div ref={messagesEndRef} />
+                  </div>
+                )}
 
-                <form onSubmit={handleSendMessage} className="p-2 bg-cardBg border-t border-borderSoft flex gap-1.5 items-center">
-                  <button
-                    type="button"
-                    onClick={() => setIsStampPickerOpen(!isStampPickerOpen)}
-                    className={`w-8 h-8 rounded-full border border-borderSoft flex items-center justify-center text-xs font-bold transition ${isStampPickerOpen ? 'bg-accentBlueLight border-accentBlue text-accentBlue' : 'bg-bgMain text-textSub'}`}
-                  >
-                    ＋
-                  </button>
-                  <input
-                    type="text"
-                    disabled={isNightRestricted}
-                    placeholder={isNightRestricted ? '利用時間外（利用休止中）' : 'メッセージを入力...'}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    className="flex-1 bg-bgMain rounded-full px-3 py-1.5 text-xs border border-borderSoft focus:outline-none focus:border-accentBlue disabled:bg-gray-100"
-                  />
-                  <button
-                    type="submit"
-                    disabled={isNightRestricted || !inputText.trim()}
-                    className="w-8 h-8 rounded-full bg-textMain text-white flex items-center justify-center text-xs font-bold disabled:opacity-30 shrink-0"
-                  >
-                    ＞
-                  </button>
-                </form>
+                {/* 入力フォーム（通話中や夜間は非表示または無効化） */}
+                {!activeCallMode && (
+                  <form onSubmit={handleSendMessage} className="p-2 bg-cardBg border-t border-borderSoft flex gap-1.5 items-center">
+                    <button
+                      type="button"
+                      onClick={() => setIsStampPickerOpen(!isStampPickerOpen)}
+                      className={`w-8 h-8 rounded-full border border-borderSoft flex items-center justify-center text-xs font-bold transition ${isStampPickerOpen ? 'bg-accentBlueLight border-accentBlue text-accentBlue' : 'bg-bgMain text-textSub'}`}
+                    >
+                      ＋
+                    </button>
+                    <input
+                      type="text"
+                      disabled={isNightRestricted}
+                      placeholder={isNightRestricted ? 'お休み時間中（利用休止中）' : 'メッセージを入力...'}
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      className="flex-1 bg-bgMain rounded-full px-3 py-1.5 text-xs border border-borderSoft focus:outline-none focus:border-accentBlue disabled:bg-gray-100"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isNightRestricted || !inputText.trim()}
+                      className="w-8 h-8 rounded-full bg-textMain text-white flex items-center justify-center text-xs font-bold disabled:opacity-30 shrink-0"
+                    >
+                      ＞
+                    </button>
+                  </form>
+                )}
               </div>
             )}
 
@@ -583,13 +601,9 @@
                   </p>
                 </div>
 
-                {/* ボタン群 */}
                 <div className="space-y-1.5 pt-1">
                   <button
-                    onClick={() => {
-                      handleMention(viewingProfile.username);
-                      setViewingProfile(null);
-                    }}
+                    onClick={() => { handleMention(viewingProfile.username); setViewingProfile(null); }}
                     className="w-full bg-badgeBg border border-borderSoft hover:border-accentBlue text-textMain py-2 rounded-lg text-xs font-bold transition"
                   >
                     @ 返信（メンション）
@@ -597,18 +611,8 @@
 
                   {viewingProfile.id !== currentUser?.id && (
                     <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={() => handleBlockUser(viewingProfile.id)}
-                        className="flex-1 bg-gray-100 hover:bg-gray-200 text-textSub py-1.5 rounded-lg text-[10px] font-bold transition"
-                      >
-                        ブロック
-                      </button>
-                      <button
-                        onClick={() => handleReportUser(viewingProfile.id)}
-                        className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 py-1.5 rounded-lg text-[10px] font-bold transition"
-                      >
-                        通報する
-                      </button>
+                      <button onClick={() => handleBlockUser(viewingProfile.id)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-textSub py-1.5 rounded-lg text-[10px] font-bold transition">ブロック</button>
+                      <button onClick={() => handleReportUser(viewingProfile.id)} className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 py-1.5 rounded-lg text-[10px] font-bold transition">通報する</button>
                     </div>
                   )}
                 </div>
@@ -617,7 +621,7 @@
           )}
 
           {/* スタンプ選択パネル */}
-          {currentTab === 'chat' && isStampPickerOpen && (
+          {currentTab === 'chat' && isStampPickerOpen && !activeCallMode && (
             <div className="absolute bottom-12 inset-x-0 bg-cardBg border-t border-borderSoft p-3 rounded-t-2xl shadow-floating z-30">
               <div className="flex justify-between items-center mb-2 px-1">
                 <span className="text-xs font-bold text-textMain">スタンプ</span>
