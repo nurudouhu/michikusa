@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>道クサ</title>
+  <!-- ファビコン設定 -->
+  <link rel="icon" href="favicon.png" type="image/png" />
+  
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Supabase JS (CDN) -->
@@ -23,11 +26,11 @@
             cardBg: '#FFFFFF',       // 白
             textMain: '#1A1A1A',     // メインの黒
             textSub: '#737373',      // 補足のグレー
-            accentBlue: '#6B7C93',   // 薄い灰青（くすみブルー）
-            accentBlueLight: '#EBF0F5', // 薄い灰青の背景用
+            accentBlue: '#6B7C93',   // 薄い灰青
+            accentBlueLight: '#EBF0F5', // 背景用薄灰青
             badgeBg: '#EAE8E3',      // 薄いベージュグレー
-            borderSoft: '#E5E2DC',   // 柔らかい境界線
-            msgBlack: '#262626'      // 自分の吹き出し用黒
+            borderSoft: '#E5E2DC',   // 境界線
+            msgBlack: '#262626'      // 自分の吹き出し黒
           },
           boxShadow: {
             soft: '0 2px 8px rgba(0, 0, 0, 0.04)',
@@ -43,6 +46,7 @@
       color: #1A1A1A;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       -webkit-tap-highlight-color: transparent;
+      user-select: none;
     }
     ::-webkit-scrollbar { width: 3px; }
     ::-webkit-scrollbar-thumb { background: #6B7C93; border-radius: 10px; }
@@ -92,10 +96,15 @@
       const [inputText, setInputText] = useState('');
       const [blockedUsers, setBlockedUsers] = useState([]);
       const [isNightRestricted, setIsNightRestricted] = useState(false);
+      const [isBanned, setIsBanned] = useState(false); // 通報累積によるアクセス制限
       const [newUsername, setNewUsername] = useState('');
       const [newBio, setNewBio] = useState('');
       const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
       const [viewingProfile, setViewingProfile] = useState(null);
+      
+      // 上部通知（メンション受け取り時）
+      const [notification, setNotification] = useState(null);
+      const longPressTimer = useRef(null);
 
       const messagesEndRef = useRef(null);
 
@@ -121,17 +130,25 @@
           if (session?.user) {
             setCurrentUser(session.user);
             await ensureProfile(session.user.id);
+            await checkBanStatus(session.user.id);
           } else {
             const { data, error } = await supabase.auth.signInAnonymously();
             if (data?.user) {
               setCurrentUser(data.user);
               await ensureProfile(data.user.id);
-            } else if (error) {
-              console.error("Auth signin error:", error);
+              await checkBanStatus(data.user.id);
             }
           }
         } catch (err) {
           console.error("Auth error:", err);
+        }
+      }
+
+      // 通報累積（2回以上）でチャット制限
+      async function checkBanStatus(userId) {
+        const { data, error } = await supabase.from('reports').select('id').eq('reported_id', userId);
+        if (data && data.length >= 2) {
+          setIsBanned(true);
         }
       }
 
@@ -168,13 +185,27 @@
 
         const channel = supabase
           .channel(`room-${selectedRoom.id}`)
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, () => {
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, (payload) => {
+            fetchMessages();
+            // 自分の名前へのメンションがあれば上部に2秒間通知表示
+            if (userProfile?.username && payload.new.content.includes(`@${userProfile.username}`)) {
+              showNotification(`メッセージが届きました`);
+            }
+          })
+          .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, () => {
             fetchMessages();
           })
           .subscribe();
 
         return () => { supabase.removeChannel(channel); };
-      }, [selectedRoom, currentUser, currentTab]);
+      }, [selectedRoom, currentUser, currentTab, userProfile]);
+
+      function showNotification(text) {
+        setNotification(text);
+        setTimeout(() => {
+          setNotification(null);
+        }, 2000); // 2秒後に自動消去
+      }
 
       async function fetchMessages() {
         if (!selectedRoom) return;
@@ -212,7 +243,7 @@
       async function handleSendMessage(e, customContent = null) {
         if (e) e.preventDefault();
         const contentToSend = customContent !== null ? customContent : inputText;
-        if (!contentToSend || !contentToSend.trim() || isNightRestricted || !currentUser || !selectedRoom) return;
+        if (!contentToSend || !contentToSend.trim() || isNightRestricted || !currentUser || !selectedRoom || isBanned) return;
         if (customContent === null && !validateInput(contentToSend)) return;
 
         if (customContent === null) setInputText('');
@@ -244,6 +275,41 @@
         }
       }
 
+      // ブロック処理
+      async function handleBlockUser(targetUserId) {
+        if (!currentUser || targetUserId === currentUser.id) return;
+        if (confirm('このユーザーをブロックしますか？（相手のコメントが非表示になります）')) {
+          await supabase.from('blocks').insert({
+            blocker_id: currentUser.id,
+            blocked_id: targetUserId
+          });
+          setViewingProfile(null);
+          await fetchBlockedUsers();
+          alert('ブロックしました');
+        }
+      }
+
+      // 通報処理（自動的にブロックも同時に実行）
+      async function handleReportUser(targetUserId) {
+        if (!currentUser || targetUserId === currentUser.id) return;
+        if (confirm('このユーザーを通報しますか？（自動的にブロックも適用されます）')) {
+          // 通報レコードを追加
+          await supabase.from('reports').insert({
+            reporter_id: currentUser.id,
+            reported_id: targetUserId,
+            reason: 'ユーザー通報'
+          });
+          // 同時にブロック
+          await supabase.from('blocks').insert({
+            blocker_id: currentUser.id,
+            blocked_id: targetUserId
+          });
+          setViewingProfile(null);
+          await fetchBlockedUsers();
+          alert('通報とブロックが完了しました');
+        }
+      }
+
       async function handleUpdateProfile() {
         if (!newUsername.trim() || !userProfile || !currentUser) return;
         
@@ -265,8 +331,41 @@
         setInputText(prev => prev + `@${username} `);
       }
 
+      // 長押し（Long Press）対応
+      function handleTouchStart(username) {
+        longPressTimer.current = setTimeout(() => {
+          handleMention(username);
+          if (navigator.vibrate) navigator.vibrate(50); // バイブレーションフィードバック
+        }, 500); // 0.5秒長押しで返信（メンション）
+      }
+
+      function handleTouchEnd() {
+        if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+        }
+      }
+
+      // 利用制限（BAN）されている場合
+      if (isBanned) {
+        return (
+          <div className="flex flex-col items-center justify-center h-full p-6 text-center bg-cardBg">
+            <h2 className="text-sm font-bold text-textMain mb-2">利用制限されています</h2>
+            <p className="text-xs text-textSub leading-relaxed">
+              複数のユーザーからの通報があったため、このアカウントからのアクセスおよびチャットの利用が制限されています。
+            </p>
+          </div>
+        );
+      }
+
       return (
         <div className="flex flex-col h-full relative">
+          {/* 上部通知（メンション着信時・2秒間表示） */}
+          {notification && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-textMain text-white text-[11px] font-bold px-4 py-2 rounded-full shadow-floating z-50 animate-bounce">
+              {notification}
+            </div>
+          )}
+
           <main className="flex-1 overflow-y-auto pb-16">
             {/* ① ホーム画面 */}
             {currentTab === 'home' && (
@@ -346,15 +445,28 @@
                             (() => {
                               const imgUrl = msg.content.replace('[STAMP_IMG:', '').replace(']', '');
                               return (
-                                <div className="p-1 inline-block">
+                                <div 
+                                  onTouchStart={() => handleTouchStart(username)}
+                                  onTouchEnd={handleTouchEnd}
+                                  onMouseDown={() => handleTouchStart(username)}
+                                  onMouseUp={handleTouchEnd}
+                                  className="p-1 inline-block cursor-pointer select-none"
+                                >
                                   <img src={imgUrl} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
                                 </div>
                               );
                             })()
                           ) : (
-                            <div className={`inline-block p-2.5 rounded-xl text-xs leading-relaxed shadow-soft break-words w-fit ${
-                              isMe ? 'bg-msgBlack text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
-                            }`}>
+                            <div 
+                              onTouchStart={() => handleTouchStart(username)}
+                              onTouchEnd={handleTouchEnd}
+                              onMouseDown={() => handleTouchStart(username)}
+                              onMouseUp={handleTouchEnd}
+                              title="長押しで返信"
+                              className={`inline-block p-2.5 rounded-xl text-xs leading-relaxed shadow-soft break-words w-fit cursor-pointer select-none active:opacity-80 ${
+                                isMe ? 'bg-msgBlack text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
+                              }`}
+                            >
                               {msg.content}
                             </div>
                           )}
@@ -447,7 +559,7 @@
             )}
           </main>
 
-          {/* プロフカードモーダル */}
+          {/* プロフカード ＆ ブロック/通報モーダル */}
           {viewingProfile && (
             <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
               <div className="bg-cardBg w-full max-w-xs rounded-xl p-4 shadow-floating border border-borderSoft space-y-3">
@@ -470,15 +582,36 @@
                     {viewingProfile.bio || '自己紹介は設定されていません。'}
                   </p>
                 </div>
-                <button
-                  onClick={() => {
-                    handleMention(viewingProfile.username);
-                    setViewingProfile(null);
-                  }}
-                  className="w-full bg-badgeBg border border-borderSoft hover:border-accentBlue text-textMain py-2 rounded-lg text-xs font-bold transition"
-                >
-                  @ メンション
-                </button>
+
+                {/* ボタン群 */}
+                <div className="space-y-1.5 pt-1">
+                  <button
+                    onClick={() => {
+                      handleMention(viewingProfile.username);
+                      setViewingProfile(null);
+                    }}
+                    className="w-full bg-badgeBg border border-borderSoft hover:border-accentBlue text-textMain py-2 rounded-lg text-xs font-bold transition"
+                  >
+                    @ 返信（メンション）
+                  </button>
+
+                  {viewingProfile.id !== currentUser?.id && (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={() => handleBlockUser(viewingProfile.id)}
+                        className="flex-1 bg-gray-100 hover:bg-gray-200 text-textSub py-1.5 rounded-lg text-[10px] font-bold transition"
+                      >
+                        ブロック
+                      </button>
+                      <button
+                        onClick={() => handleReportUser(viewingProfile.id)}
+                        className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 py-1.5 rounded-lg text-[10px] font-bold transition"
+                      >
+                        通報する
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
