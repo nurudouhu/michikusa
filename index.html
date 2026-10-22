@@ -138,7 +138,7 @@
         const totalMinutes = jstHour * 60 + jstMin;
 
         setIsNightRestricted(totalMinutes >= 1290 || totalMinutes < 390);
-　　　　setIsLunchTimeCall(true);
+        setIsLunchTimeCall(totalMinutes >= 720 && totalMinutes < 750);
         setIsStudyCall(totalMinutes >= 960 && totalMinutes < 1020);
       }
 
