@@ -62,4 +62,769 @@
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtdWp1dXJjeHB0ZHFnY3BycHF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxOTU1MTMsImV4cCI6MjEwNzc3MTUxM30.TJJsag5UetFYOzqQ02wMM73Lg0M6ut_aszxvi9hZEdA';
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    const DEFAULT
+    const DEFAULT_ROOMS = [
+      { id: 'room-study', name: '勉強部屋', description: '自分のペースで静かに集中しよう' },
+      { id: 'room-chat', name: '雑談部屋', description: '好きなお話や今日のできごとなど' },
+      { id: 'room-relax', name: 'ゆっくり部屋', description: 'な official/なにもしなくてもいい、のんびり過ごす場所' }
+    ];
+
+    const STAMP_LIST = [
+      { id: 'yahho', name: 'やっほー', url: 'stamp1.png' },
+      { id: 'arigato', name: 'ありがとう', url: 'stamp2.png' },
+      { id: 'ganbaro', name: 'がんばろう！', url: 'stamp5.png' },
+      { id: 'ehehe', name: 'えへへ', url: 'stamp6.png' },
+      { id: 'daisuki', name: 'だいすき', url: 'stamp7.png' },
+      { id: 'oyasumi', name: 'おやすみ', url: 'stamp8.png' },
+      { id: 'e', name: 'えっ！', url: 'stamp9.png' },
+      { id: 'hitoiki', name: 'ほっとひと息', url: 'stamp10.png' },
+      { id: 'iine', name: 'いいね！', url: 'stamp13.png' },
+      { id: 'nemui', name: 'ねむい…', url: 'stamp14.png' },
+      { id: 'matane', name: 'またね', url: 'stamp16.png' }
+    ];
+
+    const NG_WORDS = ['死ね', '殺す', 'きもい', 'うざい', 'キモイ', 'ウザい', '馬鹿', 'バカ', 'アホ'];
+    const PHONE_REGEX = /0\d{1,4}-?\d{1,4}-?\d{3,4}/;
+    const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+
+    // WebRTC用 STUNサーバー（無料・Google提供）
+    const RTC_CONFIG = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    function App() {
+      const [currentTab, setCurrentTab] = useState('home');
+      const [selectedRoom, setSelectedRoom] = useState(null);
+      const [currentUser, setCurrentUser] = useState(null);
+      const [userProfile, setUserProfile] = useState(null);
+      const [rooms, setRooms] = useState(DEFAULT_ROOMS);
+      const [messages, setMessages] = useState([]);
+      const [inputText, setInputText] = useState('');
+      const [blockedUsers, setBlockedUsers] = useState([]);
+      
+      // 時間モード管理
+      const [isNightRestricted, setIsNightRestricted] = useState(false);
+      const [isLunchTimeCall, setIsLunchTimeCall] = useState(false);
+      const [isStudyCall, setIsStudyCall] = useState(false);
+      
+      // 音声通話管理
+      const [isMicMuted, setIsMicMuted] = useState(true);
+      const [isAudioConnected, setIsAudioConnected] = useState(false);
+      const localStreamRef = useRef(null);
+      const peerConnectionsRef = useRef({});
+      const remoteAudioContainerRef = useRef(null);
+
+      const [isBanned, setIsBanned] = useState(false);
+      const [newUsername, setNewUsername] = useState('');
+      const [newBio, setNewBio] = useState('');
+      const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
+      const [viewingProfile, setViewingProfile] = useState(null);
+      
+      const [notification, setNotification] = useState(null);
+      const longPressTimer = useRef(null);
+      const messagesEndRef = useRef(null);
+
+      useEffect(() => {
+        initAuth();
+        fetchRooms();
+        checkTimeRestrictions();
+        const interval = setInterval(checkTimeRestrictions, 30000);
+        return () => clearInterval(interval);
+      }, []);
+
+      function checkTimeRestrictions() {
+        const now = new Date();
+        const jstHour = (now.getUTCHours() + 9) % 24;
+        const jstMin = now.getUTCMinutes();
+        const totalMinutes = jstHour * 60 + jstMin;
+
+        setIsNightRestricted(totalMinutes >= 1290 || totalMinutes < 390);
+        setIsLunchTimeCall(totalMinutes >= 720 && totalMinutes < 750);
+        setIsStudyCall(totalMinutes >= 960 && totalMinutes < 1020);
+      }
+
+      async function initAuth() {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            setCurrentUser(session.user);
+            await ensureProfile(session.user.id);
+            await checkBanStatus(session.user.id);
+          } else {
+            const { data, error } = await supabase.auth.signInAnonymously();
+            if (data?.user) {
+              setCurrentUser(data.user);
+              await ensureProfile(data.user.id);
+              await checkBanStatus(data.user.id);
+            }
+          }
+        } catch (err) {
+          console.error("Auth error:", err);
+        }
+      }
+
+      async function checkBanStatus(userId) {
+        const { data } = await supabase.from('reports').select('id').eq('reported_id', userId);
+        if (data && data.length >= 2) {
+          setIsBanned(true);
+        }
+      }
+
+      async function ensureProfile(userId) {
+        let { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+        if (!data) {
+          const defaultName = '未設定_' + userId.substring(0, 4);
+          const { data: newProf } = await supabase
+            .from('profiles')
+            .insert({ id: userId, username: defaultName, bio: '' })
+            .select()
+            .single();
+          if (newProf) {
+            setUserProfile(newProf);
+            setNewUsername(newProf.username);
+            setNewBio(newProf.bio || '');
+          }
+        } else {
+          setUserProfile(data);
+          setNewUsername(data.username || '');
+          setNewBio(data.bio || '');
+        }
+      }
+
+      async function fetchRooms() {
+        const { data } = await supabase.from('rooms').select('*').order('created_at', { ascending: true });
+        if (data && data.length > 0) setRooms(data);
+      }
+
+      // チャット ＆ シグナリング（音声通話）チャンネルの購読
+      useEffect(() => {
+        if (!currentUser || !selectedRoom || currentTab !== 'chat') return;
+        fetchMessages();
+        fetchBlockedUsers();
+
+        const channel = supabase.channel(`room-${selectedRoom.id}`, {
+          config: { broadcast: { self: false } }
+        });
+
+        // WebRTC Signaling 受信処理
+        channel
+          .on('broadcast', { event: 'webrtc-offer' }, async ({ payload }) => {
+            if (payload.targetId === currentUser.id) {
+              await handleWebRTCOffer(payload.senderId, payload.sdp);
+            }
+          })
+          .on('broadcast', { event: 'webrtc-answer' }, async ({ payload }) => {
+            if (payload.targetId === currentUser.id) {
+              await handleWebRTCAnswer(payload.senderId, payload.sdp);
+            }
+          })
+          .on('broadcast', { event: 'webrtc-candidate' }, async ({ payload }) => {
+            if (payload.targetId === currentUser.id) {
+              await handleWebRTCCandidate(payload.senderId, payload.candidate);
+            }
+          })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, (payload) => {
+            fetchMessages();
+            if (userProfile?.username && payload.new.content.includes(`@${userProfile.username}`)) {
+              showNotification(`メッセージが届きました`);
+            }
+          })
+          .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, () => {
+            fetchMessages();
+          })
+          .subscribe();
+
+        return () => { 
+          stopAudioCall();
+          supabase.removeChannel(channel); 
+        };
+      }, [selectedRoom, currentUser, currentTab, userProfile]);
+
+      // WebRTC: マイクの開始・停止
+      async function toggleAudioCall() {
+        if (isAudioConnected) {
+          stopAudioCall();
+        } else {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            localStreamRef.current = stream;
+            setIsAudioConnected(true);
+            setIsMicMuted(false);
+
+            // 通話参加の案内を配信
+            const channel = supabase.channel(`room-${selectedRoom.id}`);
+            channel.send({
+              type: 'broadcast',
+              event: 'user-joined-voice',
+              payload: { userId: currentUser.id }
+            });
+          } catch (err) {
+            alert('マイクのアクセス許可が必要です。ブラウザのマイク設定をご確認ください。');
+            console.error('Microphone error:', err);
+          }
+        }
+      }
+
+      function toggleMicMute() {
+        if (localStreamRef.current) {
+          const audioTrack = localStreamRef.current.getAudioTracks()[0];
+          if (audioTrack) {
+            audioTrack.enabled = isMicMuted; // トグル
+            setIsMicMuted(!isMicMuted);
+          }
+        }
+      }
+
+      function stopAudioCall() {
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach(track => track.stop());
+          localStreamRef.current = null;
+        }
+        Object.values(peerConnectionsRef.current).forEach(pc => pc.close());
+        peerConnectionsRef.current = {};
+        setIsAudioConnected(false);
+        setIsMicMuted(true);
+      }
+
+      async function createPeerConnection(remoteUserId) {
+        if (peerConnectionsRef.current[remoteUserId]) {
+          return peerConnectionsRef.current[remoteUserId];
+        }
+
+        const pc = new RTCPeerConnection(RTC_CONFIG);
+        peerConnectionsRef.current[remoteUserId] = pc;
+
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach(track => {
+            pc.addTrack(track, localStreamRef.current);
+          });
+        }
+
+        pc.ontrack = (event) => {
+          let audioEl = document.getElementById(`audio-${remoteUserId}`);
+          if (!audioEl) {
+            audioEl = document.createElement('audio');
+            audioEl.id = `audio-${remoteUserId}`;
+            audioEl.autoplay = true;
+            if (remoteAudioContainerRef.current) {
+              remoteAudioContainerRef.current.appendChild(audioEl);
+            }
+          }
+          audioEl.srcObject = event.streams[0];
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            const channel = supabase.channel(`room-${selectedRoom.id}`);
+            channel.send({
+              type: 'broadcast',
+              event: 'webrtc-candidate',
+              payload: { senderId: currentUser.id, targetId: remoteUserId, candidate: event.candidate }
+            });
+          }
+        };
+
+        return pc;
+      }
+
+      async function handleWebRTCOffer(senderId, sdp) {
+        const pc = await createPeerConnection(senderId);
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        const channel = supabase.channel(`room-${selectedRoom.id}`);
+        channel.send({
+          type: 'broadcast',
+          event: 'webrtc-answer',
+          payload: { senderId: currentUser.id, targetId: senderId, sdp: answer }
+        });
+      }
+
+      async function handleWebRTCAnswer(senderId, sdp) {
+        const pc = peerConnectionsRef.current[senderId];
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        }
+      }
+
+      async function handleWebRTCCandidate(senderId, candidate) {
+        const pc = peerConnectionsRef.current[senderId];
+        if (pc) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      }
+
+      function showNotification(text) {
+        setNotification(text);
+        setTimeout(() => { setNotification(null); }, 2000);
+      }
+
+      async function fetchMessages() {
+        if (!selectedRoom) return;
+        const { data } = await supabase
+          .from('messages')
+          .select('*, profile:profiles(*)')
+          .eq('room_id', selectedRoom.id)
+          .order('created_at', { ascending: true });
+        if (data) {
+          setMessages(data);
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+      }
+
+      async function fetchBlockedUsers() {
+        if (!currentUser) return;
+        const { data } = await supabase.from('blocks').select('blocked_id').eq('blocker_id', currentUser.id);
+        if (data) setBlockedUsers(data.map(b => b.blocked_id));
+      }
+
+      function validateInput(text) {
+        for (const word of NG_WORDS) {
+          if (text.includes(word)) {
+            alert(`不適切な単語が含まれているため送信できません：「${word}」`);
+            return false;
+          }
+        }
+        if (PHONE_REGEX.test(text) || EMAIL_REGEX.test(text)) {
+          alert('個人情報は送信できません。');
+          return false;
+        }
+        return true;
+      }
+
+      async function handleSendMessage(e, customContent = null) {
+        if (e) e.preventDefault();
+        const contentToSend = customContent !== null ? customContent : inputText;
+        const isInCallMode = isLunchTimeCall || (isStudyCall && selectedRoom?.id === 'room-study');
+        if (!contentToSend || !contentToSend.trim() || isNightRestricted || isInCallMode || !currentUser || !selectedRoom || isBanned) return;
+        if (customContent === null && !validateInput(contentToSend)) return;
+
+        if (customContent === null) setInputText('');
+        
+        const { error } = await supabase.from('messages').insert({
+          room_id: selectedRoom.id,
+          user_id: currentUser.id,
+          content: contentToSend
+        });
+
+        if (!error) {
+          setIsStampPickerOpen(false);
+          fetchMessages();
+        }
+      }
+
+      function handleSendStamp(stamp) {
+        if (!selectedRoom) return;
+        const stampMsg = `[STAMP_IMG:${stamp.url}]`;
+        handleSendMessage(null, stampMsg);
+      }
+
+      async function handleDeleteMessage(messageId) {
+        if (confirm('このメッセージを削除しますか？')) {
+          await supabase.from('messages').delete().eq('id', messageId);
+          fetchMessages();
+        }
+      }
+
+      async function handleBlockUser(targetUserId) {
+        if (!currentUser || targetUserId === currentUser.id) return;
+        if (confirm('このユーザーをブロックしますか？')) {
+          await supabase.from('blocks').insert({ blocker_id: currentUser.id, blocked_id: targetUserId });
+          setViewingProfile(null);
+          await fetchBlockedUsers();
+          alert('ブロックしました');
+        }
+      }
+
+      async function handleReportUser(targetUserId) {
+        if (!currentUser || targetUserId === currentUser.id) return;
+        if (confirm('このユーザーを通報しますか？（同時にブロックも適用されます）')) {
+          await supabase.from('reports').insert({ reporter_id: currentUser.id, reported_id: targetUserId, reason: 'ユーザー通報' });
+          await supabase.from('blocks').insert({ blocker_id: currentUser.id, blocked_id: targetUserId });
+          setViewingProfile(null);
+          await fetchBlockedUsers();
+          alert('通報とブロックが完了しました');
+        }
+      }
+
+      async function handleUpdateProfile() {
+        if (!newUsername.trim() || !userProfile || !currentUser) return;
+        const { error } = await supabase.from('profiles').upsert({ id: currentUser.id, username: newUsername, bio: newBio });
+        if (error) {
+          alert('プロフィールの更新に失敗しました: ' + error.message);
+        } else {
+          setUserProfile({ ...userProfile, username: newUsername, bio: newBio });
+          alert('プロフィールを保存しました');
+        }
+      }
+
+      function handleMention(username) {
+        setInputText(prev => prev + `@${username} `);
+      }
+
+      function handleTouchStart(username) {
+        longPressTimer.current = setTimeout(() => {
+          handleMention(username);
+          if (navigator.vibrate) navigator.vibrate(50);
+        }, 500);
+      }
+
+      function handleTouchEnd() {
+        if (longPressTimer.current) clearTimeout(longPressTimer.current);
+      }
+
+      if (isBanned) {
+        return (
+          <div className="flex flex-col items-center justify-center h-full p-6 text-center bg-cardBg">
+            <h2 className="text-sm font-bold text-textMain mb-2">利用制限されています</h2>
+            <p className="text-xs text-textSub leading-relaxed">
+              複数のユーザーからの通報があったため、このアカウントからのアクセスおよびチャットの利用が制限されています。
+            </p>
+          </div>
+        );
+      }
+
+      const activeCallMode = isLunchTimeCall ? 'lunch' : (isStudyCall && selectedRoom?.id === 'room-study' ? 'study' : null);
+
+      return (
+        <div className="flex flex-col h-full relative">
+          {/* リモート音声エレメントのコンテナ */}
+          <div ref={remoteAudioContainerRef} className="hidden" />
+
+          {notification && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-textMain text-white text-[11px] font-bold px-4 py-2 rounded-full shadow-floating z-50 animate-bounce">
+              {notification}
+            </div>
+          )}
+
+          <main className="flex-1 overflow-y-auto pb-16">
+            {/* ① ホーム画面 */}
+            {currentTab === 'home' && (
+              <div className="p-4 space-y-4">
+                <header className="flex justify-between items-center pt-1 border-b border-borderSoft pb-3">
+                  <div>
+                    <h1 className="text-xl font-bold text-textMain tracking-widest">道クサ</h1>
+                    <p className="text-[10px] text-textSub mt-0.5">話すたび、少しだけ前を向ける場所</p>
+                  </div>
+                  <div
+                    onClick={() => setCurrentTab('profile')}
+                    className="w-8 h-8 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-xs cursor-pointer shadow-soft"
+                  >
+                    {userProfile?.username?.substring(0, 1) || '道'}
+                  </div>
+                </header>
+
+                <div>
+                  <h2 className="text-[11px] font-bold text-textSub mb-2 px-1">ルームを選択</h2>
+                  <div className="space-y-2.5">
+                    {rooms.map((room) => (
+                      <div
+                        key={room.id}
+                        onClick={() => {
+                          setSelectedRoom(room);
+                          setInputText('');
+                          setCurrentTab('chat');
+                          setIsStampPickerOpen(false);
+                        }}
+                        className="bg-cardBg rounded-xl p-3.5 shadow-soft border border-borderSoft flex items-center justify-between cursor-pointer hover:border-accentBlue transition active:scale-[0.98]"
+                      >
+                        <div>
+                          <p className="text-xs font-bold text-textMain">{room.name}</p>
+                          <p className="text-[10px] text-textSub mt-1">{room.description}</p>
+                        </div>
+                        <span className="text-accentBlue text-xs font-bold ml-2">＞</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ② チャット ＆ 音声通話画面 */}
+            {currentTab === 'chat' && (
+              <div className="flex flex-col h-full bg-bgMain">
+                <header className="bg-cardBg px-3 py-2.5 border-b border-borderSoft flex justify-between items-center sticky top-0 z-10 shadow-soft">
+                  <button onClick={() => { stopAudioCall(); setSelectedRoom(null); setInputText(''); setCurrentTab('home'); setIsStampPickerOpen(false); }} className="text-xs font-bold text-accentBlue">＜ 部屋一覧</button>
+                  <h2 className="font-bold text-xs text-textMain">
+                    {selectedRoom?.name} 
+                    {activeCallMode === 'lunch' && ' (お昼休み通話中)'}
+                    {activeCallMode === 'study' && ' (勉強会通話中)'}
+                  </h2>
+                  <div className="w-8" />
+                </header>
+
+                {/* 音声通話モード画面 */}
+                {activeCallMode ? (
+                  <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4 bg-cardBg m-3 rounded-2xl border border-borderSoft shadow-soft">
+                    <div className="w-16 h-16 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-xl shadow-soft animate-pulse">
+                      {activeCallMode === 'lunch' ? '話' : '学'}
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-bold text-textMain mb-1">
+                        {activeCallMode === 'lunch' ? 'お昼休み音声通話の時間です' : '放課後勉強会の時間です'}
+                      </h3>
+                      <p className="text-[10px] text-textSub leading-relaxed">
+                        {activeCallMode === 'lunch' 
+                          ? '12:00〜12:30の間は、チャットがお休みになりみんなで音声通話を楽しめます。' 
+                          : '16:00〜17:00の間は、勉強部屋でみんなと声を繋いで集中します。'}
+                      </p>
+                    </div>
+
+                    {/* 通話接続 ＆ マイク切り替え操作UI */}
+                    <div className="space-y-2 pt-2 w-full max-w-[200px]">
+                      {!isAudioConnected ? (
+                        <button
+                          onClick={toggleAudioCall}
+                          className="w-full bg-textMain text-white py-2.5 rounded-full text-xs font-bold transition shadow-soft hover:bg-black"
+                        >
+                          通話に参加する 🎙️
+                        </button>
+                      ) : (
+                        <div className="space-y-2">
+                          <button
+                            onClick={toggleMicMute}
+                            className={`w-full py-2.5 rounded-full text-xs font-bold transition shadow-soft flex items-center justify-center gap-2 ${
+                              isMicMuted ? 'bg-gray-200 text-textSub border border-borderSoft' : 'bg-accentBlue text-white'
+                            }`}
+                          >
+                            <span>●</span>
+                            <span>{isMicMuted ? 'マイク OFF (ミュート中)' : 'マイク ON (発話中)'}</span>
+                          </button>
+                          <button
+                            onClick={stopAudioCall}
+                            className="w-full bg-red-50 text-red-600 border border-red-200 py-1.5 rounded-full text-[10px] font-bold"
+                          >
+                            通話から退出
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  /* 通常チャット画面 */
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                    {messages.filter(m => !blockedUsers.includes(m.user_id)).map((msg) => {
+                      const isMe = msg.user_id === currentUser?.id;
+                      const username = msg.profile?.username || 'ユーザー';
+                      const isStamp = msg.content.startsWith('[STAMP_IMG:');
+
+                      return (
+                        <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
+                          <div 
+                            onClick={() => setViewingProfile(msg.profile)}
+                            className="w-7 h-7 rounded-full bg-badgeBg border border-borderSoft flex items-center justify-center font-bold text-[10px] shrink-0 text-textSub mb-1 cursor-pointer hover:border-accentBlue"
+                          >
+                            {username.substring(0, 1)}
+                          </div>
+                          <div className={`flex flex-col max-w-[70%] ${isMe ? 'items-end' : 'items-start'}`}>
+                            <div className="flex items-center gap-1.5 mb-0.5 px-1">
+                              <span 
+                                onClick={() => handleMention(username)} 
+                                className="text-[9px] text-textSub font-bold cursor-pointer hover:text-accentBlue"
+                              >
+                                {username}
+                              </span>
+                            </div>
+                            {isStamp ? (
+                              <div 
+                                onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
+                                onMouseDown={() => handleTouchStart(username)} onMouseUp={handleTouchEnd}
+                                className="p-1 inline-block cursor-pointer select-none"
+                              >
+                                <img src={msg.content.replace('[STAMP_IMG:', '').replace(']', '')} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
+                              </div>
+                            ) : (
+                              <div 
+                                onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
+                                onMouseDown={() => handleTouchStart(username)} onMouseUp={handleTouchEnd}
+                                title="長押しで返信"
+                                className={`inline-block p-2.5 rounded-xl text-xs leading-relaxed shadow-soft break-words w-fit cursor-pointer select-none active:opacity-80 ${
+                                  isMe ? 'bg-msgBlack text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
+                                }`}
+                              >
+                                {msg.content}
+                              </div>
+                            )}
+                          </div>
+                          {isMe && (
+                            <button onClick={() => handleDeleteMessage(msg.id)} className="text-[10px] text-textSub opacity-40 hover:opacity-100 mb-2 font-bold">×</button>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <div ref={messagesEndRef} />
+                  </div>
+                )}
+
+                {!activeCallMode && (
+                  <form onSubmit={handleSendMessage} className="p-2 bg-cardBg border-t border-borderSoft flex gap-1.5 items-center">
+                    <button
+                      type="button"
+                      onClick={() => setIsStampPickerOpen(!isStampPickerOpen)}
+                      className={`w-8 h-8 rounded-full border border-borderSoft flex items-center justify-center text-xs font-bold transition ${isStampPickerOpen ? 'bg-accentBlueLight border-accentBlue text-accentBlue' : 'bg-bgMain text-textSub'}`}
+                    >
+                      ＋
+                    </button>
+                    <input
+                      type="text"
+                      disabled={isNightRestricted}
+                      placeholder={isNightRestricted ? 'お休み時間中（利用休止中）' : 'メッセージを入力...'}
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      className="flex-1 bg-bgMain rounded-full px-3 py-1.5 text-xs border border-borderSoft focus:outline-none focus:border-accentBlue disabled:bg-gray-100"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isNightRestricted || !inputText.trim()}
+                      className="w-8 h-8 rounded-full bg-textMain text-white flex items-center justify-center text-xs font-bold disabled:opacity-30 shrink-0"
+                    >
+                      ＞
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
+
+            {/* ③ プロフィール設定画面 */}
+            {currentTab === 'profile' && (
+              <div className="p-4 space-y-4">
+                <header className="border-b border-borderSoft pb-2.5">
+                  <h1 className="text-base font-bold text-textMain">プロフィール設定</h1>
+                  <p className="text-[10px] text-textSub mt-0.5">名前や自己紹介を設定できます</p>
+                </header>
+
+                <div className="bg-cardBg rounded-xl p-4 shadow-soft border border-borderSoft space-y-3">
+                  <div className="flex items-center gap-3 border-b border-borderSoft pb-3">
+                    <div className="w-12 h-12 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-base">
+                      {newUsername?.substring(0, 1) || '道'}
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-textSub">プレビュー</p>
+                      <p className="text-xs font-bold text-textMain">{newUsername || 'ユーザー'}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1 pt-1">
+                    <label className="text-[11px] font-bold text-textSub block">ニックネーム</label>
+                    <input
+                      type="text"
+                      value={newUsername}
+                      onChange={(e) => setNewUsername(e.target.value)}
+                      className="w-full text-xs border border-borderSoft p-2.5 rounded-xl focus:outline-none focus:border-accentBlue bg-bgMain"
+                      placeholder="ニックネームを入力"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-textSub block">自己紹介</label>
+                    <textarea
+                      value={newBio}
+                      onChange={(e) => setNewBio(e.target.value)}
+                      rows="3"
+                      className="w-full text-xs border border-borderSoft p-2.5 rounded-xl focus:outline-none focus:border-accentBlue bg-bgMain resize-none"
+                      placeholder="好きなことや自己紹介を入力"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleUpdateProfile}
+                    className="w-full bg-textMain hover:bg-black text-white py-2.5 rounded-xl text-xs font-bold transition shadow-soft mt-2"
+                  >
+                    保存する
+                  </button>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* プロフカード ＆ ブロック/通報モーダル */}
+          {viewingProfile && (
+            <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+              <div className="bg-cardBg w-full max-w-xs rounded-xl p-4 shadow-floating border border-borderSoft space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-bold text-textSub">プロフィールカード</span>
+                  <button onClick={() => setViewingProfile(null)} className="text-xs text-textSub font-bold">×</button>
+                </div>
+                <div className="flex items-center gap-3 pt-1">
+                  <div className="w-10 h-10 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-sm shrink-0">
+                    {viewingProfile.username?.substring(0, 1) || '道'}
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-textMain">{viewingProfile.username || 'ユーザー'}</h3>
+                    <p className="text-[10px] text-textSub">道クサメンバー</p>
+                  </div>
+                </div>
+                <div className="bg-bgMain p-3 rounded-lg border border-borderSoft min-h-[60px]">
+                  <p className="text-[9px] text-textSub mb-1 font-bold">自己紹介</p>
+                  <p className="text-xs text-textMain leading-relaxed whitespace-pre-wrap">
+                    {viewingProfile.bio || '自己紹介は設定されていません。'}
+                  </p>
+                </div>
+
+                <div className="space-y-1.5 pt-1">
+                  <button
+                    onClick={() => { handleMention(viewingProfile.username); setViewingProfile(null); }}
+                    className="w-full bg-badgeBg border border-borderSoft hover:border-accentBlue text-textMain py-2 rounded-lg text-xs font-bold transition"
+                  >
+                    @ 返信（メンション）
+                  </button>
+
+                  {viewingProfile.id !== currentUser?.id && (
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => handleBlockUser(viewingProfile.id)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-textSub py-1.5 rounded-lg text-[10px] font-bold transition">ブロック</button>
+                      <button onClick={() => handleReportUser(viewingProfile.id)} className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 py-1.5 rounded-lg text-[10px] font-bold transition">通報する</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* スタンプ選択パネル */}
+          {currentTab === 'chat' && isStampPickerOpen && !activeCallMode && (
+            <div className="absolute bottom-12 inset-x-0 bg-cardBg border-t border-borderSoft p-3 rounded-t-2xl shadow-floating z-30">
+              <div className="flex justify-between items-center mb-2 px-1">
+                <span className="text-xs font-bold text-textMain">スタンプ</span>
+                <button onClick={() => setIsStampPickerOpen(false)} className="text-xs text-textSub font-bold">×</button>
+              </div>
+              <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1">
+                {STAMP_LIST.map((stamp) => (
+                  <button
+                    key={stamp.id}
+                    onClick={() => handleSendStamp(stamp)}
+                    className="p-1 border border-borderSoft rounded-lg hover:bg-bgMain transition flex flex-col items-center justify-center bg-white"
+                  >
+                    <img src={stamp.url} alt={stamp.name} className="w-12 h-12 object-contain" />
+                    <span className="text-[9px] text-textSub mt-1">{stamp.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 下部ナビゲーション */}
+          <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-2 z-40 shadow-soft">
+            <button
+              onClick={() => { stopAudioCall(); setCurrentTab('home'); setIsStampPickerOpen(false); setViewingProfile(null); }}
+              className={`flex flex-col items-center text-[10px] font-bold transition ${currentTab === 'home' || currentTab === 'chat' ? 'text-accentBlue' : 'text-textSub'}`}
+            >
+              <span className="text-xs mb-0.5">●</span>
+              <span>ホーム</span>
+            </button>
+
+            <button
+              onClick={() => { stopAudioCall(); setCurrentTab('profile'); setIsStampPickerOpen(false); setViewingProfile(null); }}
+              className={`flex flex-col items-center text-[10px] font-bold transition ${currentTab === 'profile' ? 'text-accentBlue' : 'text-textSub'}`}
+            >
+              <span className="text-xs mb-0.5">●</span>
+              <span>プロフィール</span>
+            </button>
+          </nav>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
