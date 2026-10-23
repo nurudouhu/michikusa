@@ -65,7 +65,7 @@
     const DEFAULT_ROOMS = [
       { id: 'room-study', name: '勉強部屋', description: '自分のペースで静かに集中しよう' },
       { id: 'room-chat', name: '雑談部屋', description: '好きなお話や今日のできごとなど' },
-      { id: 'room-relax', name: 'ゆっくり部屋', description: 'な official/なにもしなくてもいい、のんびり過ごす場所' }
+      { id: 'room-relax', name: 'ゆっくり部屋', description: 'なにもしなくてもいい、のんびり過ごす場所' }
     ];
 
     const STAMP_LIST = [
@@ -82,11 +82,13 @@
       { id: 'matane', name: 'またね', url: 'stamp16.png' }
     ];
 
+    // リアクション用記号リスト（黒の記号のみ）
+    const REACTION_SYMBOLS = ['★', '♥', '●', '▲'];
+
     const NG_WORDS = ['死ね', '殺す', 'きもい', 'うざい', 'キモイ', 'ウザい', '馬鹿', 'バカ', 'アホ'];
     const PHONE_REGEX = /0\d{1,4}-?\d{1,4}-?\d{3,4}/;
     const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
-    // WebRTC用 STUNサーバー（無料・Google提供）
     const RTC_CONFIG = {
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     };
@@ -98,15 +100,14 @@
       const [userProfile, setUserProfile] = useState(null);
       const [rooms, setRooms] = useState(DEFAULT_ROOMS);
       const [messages, setMessages] = useState([]);
+      const [reactions, setReactions] = useState({}); // { message_id: [{ symbol, user_id }] }
       const [inputText, setInputText] = useState('');
       const [blockedUsers, setBlockedUsers] = useState([]);
       
-      // 時間モード管理
       const [isNightRestricted, setIsNightRestricted] = useState(false);
       const [isLunchTimeCall, setIsLunchTimeCall] = useState(false);
       const [isStudyCall, setIsStudyCall] = useState(false);
       
-      // 音声通話管理
       const [isMicMuted, setIsMicMuted] = useState(true);
       const [isAudioConnected, setIsAudioConnected] = useState(false);
       const localStreamRef = useRef(null);
@@ -195,17 +196,16 @@
         if (data && data.length > 0) setRooms(data);
       }
 
-      // チャット ＆ シグナリング（音声通話）チャンネルの購読
       useEffect(() => {
         if (!currentUser || !selectedRoom || currentTab !== 'chat') return;
         fetchMessages();
+        fetchReactions();
         fetchBlockedUsers();
 
         const channel = supabase.channel(`room-${selectedRoom.id}`, {
           config: { broadcast: { self: false } }
         });
 
-        // WebRTC Signaling 受信処理
         channel
           .on('broadcast', { event: 'webrtc-offer' }, async ({ payload }) => {
             if (payload.targetId === currentUser.id) {
@@ -231,6 +231,9 @@
           .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, () => {
             fetchMessages();
           })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, () => {
+            fetchReactions();
+          })
           .subscribe();
 
         return () => { 
@@ -239,7 +242,6 @@
         };
       }, [selectedRoom, currentUser, currentTab, userProfile]);
 
-      // WebRTC: マイクの開始・停止
       async function toggleAudioCall() {
         if (isAudioConnected) {
           stopAudioCall();
@@ -250,7 +252,6 @@
             setIsAudioConnected(true);
             setIsMicMuted(false);
 
-            // 通話参加の案内を配信
             const channel = supabase.channel(`room-${selectedRoom.id}`);
             channel.send({
               type: 'broadcast',
@@ -268,7 +269,7 @@
         if (localStreamRef.current) {
           const audioTrack = localStreamRef.current.getAudioTracks()[0];
           if (audioTrack) {
-            audioTrack.enabled = isMicMuted; // トグル
+            audioTrack.enabled = isMicMuted;
             setIsMicMuted(!isMicMuted);
           }
         }
@@ -370,6 +371,36 @@
           setMessages(data);
           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
+      }
+
+      // リアクションの取得
+      async function fetchReactions() {
+        const { data } = await supabase.from('reactions').select('*');
+        if (data) {
+          const map = {};
+          data.forEach(r => {
+            if (!map[r.message_id]) map[r.message_id] = [];
+            map[r.message_id].push(r);
+          });
+          setReactions(map);
+        }
+      }
+
+      // リアクションのトグル（追加・削除）
+      async function handleToggleReaction(messageId, symbol) {
+        if (!currentUser) return;
+        const existing = (reactions[messageId] || []).find(r => r.user_id === currentUser.id && r.symbol === symbol);
+
+        if (existing) {
+          await supabase.from('reactions').delete().eq('id', existing.id);
+        } else {
+          await supabase.from('reactions').insert({
+            message_id: messageId,
+            user_id: currentUser.id,
+            symbol: symbol
+          });
+        }
+        fetchReactions();
       }
 
       async function fetchBlockedUsers() {
@@ -488,7 +519,6 @@
 
       return (
         <div className="flex flex-col h-full relative">
-          {/* リモート音声エレメントのコンテナ */}
           <div ref={remoteAudioContainerRef} className="hidden" />
 
           {notification && (
@@ -553,7 +583,6 @@
                   <div className="w-8" />
                 </header>
 
-                {/* 音声通話モード画面 */}
                 {activeCallMode ? (
                   <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4 bg-cardBg m-3 rounded-2xl border border-borderSoft shadow-soft">
                     <div className="w-16 h-16 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-xl shadow-soft animate-pulse">
@@ -570,7 +599,6 @@
                       </p>
                     </div>
 
-                    {/* 通話接続 ＆ マイク切り替え操作UI */}
                     <div className="space-y-2 pt-2 w-full max-w-[200px]">
                       {!isAudioConnected ? (
                         <button
@@ -607,6 +635,7 @@
                       const isMe = msg.user_id === currentUser?.id;
                       const username = msg.profile?.username || 'ユーザー';
                       const isStamp = msg.content.startsWith('[STAMP_IMG:');
+                      const msgReactions = reactions[msg.id] || [];
 
                       return (
                         <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
@@ -625,6 +654,8 @@
                                 {username}
                               </span>
                             </div>
+
+                            {/* 吹き出し本文またはスタンプ */}
                             {isStamp ? (
                               <div 
                                 onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
@@ -645,7 +676,31 @@
                                 {msg.content}
                               </div>
                             )}
+
+                            {/* リアクション機能（ボタン ＆ ついた記号の合計表示） */}
+                            <div className="flex items-center gap-1 mt-1 flex-wrap">
+                              {REACTION_SYMBOLS.map(sym => {
+                                const count = msgReactions.filter(r => r.symbol === sym).length;
+                                const isMyReaction = msgReactions.some(r => r.symbol === sym && r.user_id === currentUser?.id);
+
+                                return (
+                                  <button
+                                    key={sym}
+                                    onClick={() => handleToggleReaction(msg.id, sym)}
+                                    className={`px-1.5 py-0.5 text-[10px] rounded-full border transition flex items-center gap-0.5 ${
+                                      isMyReaction 
+                                        ? 'bg-accentBlueLight border-accentBlue text-accentBlue font-bold' 
+                                        : 'bg-cardBg border-borderSoft text-textSub hover:border-accentBlue'
+                                    }`}
+                                  >
+                                    <span>{sym}</span>
+                                    {count > 0 && <span>{count}</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
+
                           {isMe && (
                             <button onClick={() => handleDeleteMessage(msg.id)} className="text-[10px] text-textSub opacity-40 hover:opacity-100 mb-2 font-bold">×</button>
                           )}
