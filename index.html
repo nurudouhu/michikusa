@@ -90,7 +90,7 @@
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     };
 
-    // シンプルな黒のサムズアップSVGアイコンコンポーネント
+    // シンプルな黒のサムズアップSVGアイコン
     function ThumbsUpIcon({ className = "w-4 h-4" }) {
       return (
         <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -100,7 +100,7 @@
     }
 
     function App() {
-      const [currentTab, setCurrentTab] = useState('home'); // 'home', 'chat', 'profile', 'memo'
+      const [currentTab, setCurrentTab] = useState('home');
       const [selectedRoom, setSelectedRoom] = useState(null);
       const [currentUser, setCurrentUser] = useState(null);
       const [userProfile, setUserProfile] = useState(null);
@@ -110,7 +110,6 @@
       const [inputText, setInputText] = useState('');
       const [blockedUsers, setBlockedUsers] = useState([]);
       
-      // メモ帳の状態
       const [memoContent, setMemoContent] = useState('');
       
       const [isNightRestricted, setIsNightRestricted] = useState(false);
@@ -128,6 +127,9 @@
       const [newBio, setNewBio] = useState('');
       const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
       const [viewingProfile, setViewingProfile] = useState(null);
+      
+      // 長押しメニュー用状態 ({ message, username })
+      const [actionMenu, setActionMenu] = useState(null);
       
       const [notification, setNotification] = useState(null);
       const longPressTimer = useRef(null);
@@ -413,7 +415,6 @@
         }
       }
 
-      // サムズアップリアクションのトグル（文字コード 'THUMBS_UP' として管理）
       async function handleToggleThumbsUp(messageId) {
         if (!currentUser) return;
         const symbol = 'THUMBS_UP';
@@ -529,9 +530,10 @@
         setInputText(prev => prev + `@${username} `);
       }
 
-      function handleTouchStart(username) {
+      // 長押しでメニューを開く処理
+      function handleTouchStart(msg, username) {
         longPressTimer.current = setTimeout(() => {
-          handleMention(username);
+          setActionMenu({ message: msg, username: username });
           if (navigator.vibrate) navigator.vibrate(50);
         }, 500);
       }
@@ -673,7 +675,6 @@
                       const isStamp = msg.content.startsWith('[STAMP_IMG:');
                       const msgReactions = reactions[msg.id] || [];
                       const thumbsUpCount = msgReactions.filter(r => r.symbol === 'THUMBS_UP').length;
-                      const isMyThumbsUp = msgReactions.some(r => r.symbol === 'THUMBS_UP' && r.user_id === currentUser?.id);
 
                       return (
                         <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
@@ -693,19 +694,19 @@
                               </span>
                             </div>
 
+                            {/* 吹き出し（長押しメニュー対応） */}
                             {isStamp ? (
                               <div 
-                                onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
-                                onMouseDown={() => handleTouchStart(username)} onMouseUp={handleTouchEnd}
+                                onTouchStart={() => handleTouchStart(msg, username)} onTouchEnd={handleTouchEnd}
+                                onMouseDown={() => handleTouchStart(msg, username)} onMouseUp={handleTouchEnd}
                                 className="p-1 inline-block cursor-pointer select-none"
                               >
                                 <img src={msg.content.replace('[STAMP_IMG:', '').replace(']', '')} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
                               </div>
                             ) : (
                               <div 
-                                onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
-                                onMouseDown={() => handleTouchStart(username)} onMouseUp={handleTouchEnd}
-                                title="長押しで返信"
+                                onTouchStart={() => handleTouchStart(msg, username)} onTouchEnd={handleTouchEnd}
+                                onMouseDown={() => handleTouchStart(msg, username)} onMouseUp={handleTouchEnd}
                                 className={`inline-block p-2.5 rounded-xl text-xs leading-relaxed shadow-soft break-words w-fit cursor-pointer select-none active:opacity-80 ${
                                   isMe ? 'bg-msgBlack text-white rounded-tr-none' : 'bg-cardBg text-textMain rounded-tl-none border border-borderSoft'
                                 }`}
@@ -714,20 +715,15 @@
                               </div>
                             )}
 
-                            {/* サムズアップ（👍）リアクションボタン */}
-                            <div className="flex items-center gap-1 mt-1">
-                              <button
-                                onClick={() => handleToggleThumbsUp(msg.id)}
-                                className={`px-2 py-1 text-[10px] rounded-full border transition flex items-center gap-1 ${
-                                  isMyThumbsUp 
-                                    ? 'bg-accentBlueLight border-accentBlue text-accentBlue font-bold' 
-                                    : 'bg-cardBg border-borderSoft text-textSub hover:border-accentBlue'
-                                }`}
-                              >
-                                <ThumbsUpIcon className="w-3.5 h-3.5" />
-                                {thumbsUpCount > 0 && <span>{thumbsUpCount}</span>}
-                              </button>
-                            </div>
+                            {/* 吹き出し下に付いたサムズアップ件数表示 */}
+                            {thumbsUpCount > 0 && (
+                              <div className="flex items-center gap-1 mt-1">
+                                <div className="px-2 py-0.5 text-[10px] rounded-full border bg-accentBlueLight border-accentBlue text-accentBlue font-bold flex items-center gap-1">
+                                  <ThumbsUpIcon className="w-3 h-3" />
+                                  <span>{thumbsUpCount}</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {isMe && (
@@ -823,7 +819,7 @@
               </div>
             )}
 
-            {/* ④ 自分だけが見れるメモ帳画面 */}
+            {/* ④ メモ帳画面 */}
             {currentTab === 'memo' && (
               <div className="p-4 space-y-4">
                 <header className="border-b border-borderSoft pb-2.5">
@@ -849,6 +845,43 @@
               </div>
             )}
           </main>
+
+          {/* ★ 長押しアクションメニュー（ポップアップ） */}
+          {actionMenu && (
+            <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+              <div className="bg-cardBg w-full max-w-xs rounded-2xl p-4 shadow-floating border border-borderSoft space-y-3 animate-fade-in">
+                <div className="flex justify-between items-center border-b border-borderSoft pb-2">
+                  <span className="text-xs font-bold text-textSub">{actionMenu.username} さんのコメント</span>
+                  <button onClick={() => setActionMenu(null)} className="text-xs text-textSub font-bold">×</button>
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  {/* 👍 サムズアップリアクションボタン */}
+                  <button
+                    onClick={() => {
+                      handleToggleThumbsUp(actionMenu.message.id);
+                      setActionMenu(null);
+                    }}
+                    className="w-full bg-accentBlueLight border border-accentBlue text-accentBlue py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 hover:bg-blue-100"
+                  >
+                    <ThumbsUpIcon className="w-4 h-4" />
+                    <span>サムズアップ (👍) を押す</span>
+                  </button>
+
+                  {/* 返信（メンション）ボタン */}
+                  <button
+                    onClick={() => {
+                      handleMention(actionMenu.username);
+                      setActionMenu(null);
+                    }}
+                    className="w-full bg-badgeBg border border-borderSoft text-textMain py-2.5 rounded-xl text-xs font-bold transition hover:border-accentBlue"
+                  >
+                    @ 返信（メンション）
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* プロフカード ＆ ブロック/通報モーダル */}
           {viewingProfile && (
@@ -915,7 +948,7 @@
             </div>
           )}
 
-          {/* 下部ナビゲーション（ホーム・プロフィール・メモ帳） */}
+          {/* 下部ナビゲーション */}
           <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-2 z-40 shadow-soft">
             <button
               onClick={() => { stopAudioCall(); setCurrentTab('home'); setIsStampPickerOpen(false); setViewingProfile(null); }}
