@@ -82,9 +82,6 @@
       { id: 'matane', name: 'またね', url: 'stamp16.png' }
     ];
 
-    // リアクション用記号リスト（黒の記号のみ）
-    const REACTION_SYMBOLS = ['★', '♥', '●', '▲'];
-
     const NG_WORDS = ['死ね', '殺す', 'きもい', 'うざい', 'キモイ', 'ウザい', '馬鹿', 'バカ', 'アホ'];
     const PHONE_REGEX = /0\d{1,4}-?\d{1,4}-?\d{3,4}/;
     const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
@@ -93,16 +90,28 @@
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     };
 
+    // シンプルな黒のサムズアップSVGアイコンコンポーネント
+    function ThumbsUpIcon({ className = "w-4 h-4" }) {
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <path d="M2 20h2c.55 0 1-.45 1-1v-9c0-.55-.45-1-1-1H2v11zm19.83-7.12c.11-.25.17-.52.17-.8V10c0-1.1-.9-2-2-2h-5.5l.92-4.65c.05-.22.02-.46-.08-.66-.23-.45-.7-.75-1.24-.75H11.5c-.32 0-.63.13-.85.35L7 7.79C6.38 8.41 6 9.27 6 10.18V19c0 1.1.9 2 2 2h7.31c.88 0 1.66-.58 1.92-1.43l1.83-6c.12-.38.07-.8-.14-1.14z"/>
+        </svg>
+      );
+    }
+
     function App() {
-      const [currentTab, setCurrentTab] = useState('home');
+      const [currentTab, setCurrentTab] = useState('home'); // 'home', 'chat', 'profile', 'memo'
       const [selectedRoom, setSelectedRoom] = useState(null);
       const [currentUser, setCurrentUser] = useState(null);
       const [userProfile, setUserProfile] = useState(null);
       const [rooms, setRooms] = useState(DEFAULT_ROOMS);
       const [messages, setMessages] = useState([]);
-      const [reactions, setReactions] = useState({}); // { message_id: [{ symbol, user_id }] }
+      const [reactions, setReactions] = useState({});
       const [inputText, setInputText] = useState('');
       const [blockedUsers, setBlockedUsers] = useState([]);
+      
+      // メモ帳の状態
+      const [memoContent, setMemoContent] = useState('');
       
       const [isNightRestricted, setIsNightRestricted] = useState(false);
       const [isLunchTimeCall, setIsLunchTimeCall] = useState(false);
@@ -150,12 +159,14 @@
             setCurrentUser(session.user);
             await ensureProfile(session.user.id);
             await checkBanStatus(session.user.id);
+            await fetchMemo(session.user.id);
           } else {
             const { data, error } = await supabase.auth.signInAnonymously();
             if (data?.user) {
               setCurrentUser(data.user);
               await ensureProfile(data.user.id);
               await checkBanStatus(data.user.id);
+              await fetchMemo(data.user.id);
             }
           }
         } catch (err) {
@@ -189,6 +200,23 @@
           setNewUsername(data.username || '');
           setNewBio(data.bio || '');
         }
+      }
+
+      async function fetchMemo(userId) {
+        const { data } = await supabase.from('memos').select('content').eq('user_id', userId).single();
+        if (data) {
+          setMemoContent(data.content || '');
+        }
+      }
+
+      async function handleSaveMemo() {
+        if (!currentUser) return;
+        await supabase.from('memos').upsert({
+          user_id: currentUser.id,
+          content: memoContent,
+          updated_at: new Date()
+        });
+        alert('メモを保存しました');
       }
 
       async function fetchRooms() {
@@ -373,7 +401,6 @@
         }
       }
 
-      // リアクションの取得
       async function fetchReactions() {
         const { data } = await supabase.from('reactions').select('*');
         if (data) {
@@ -386,9 +413,10 @@
         }
       }
 
-      // リアクションのトグル（追加・削除）
-      async function handleToggleReaction(messageId, symbol) {
+      // サムズアップリアクションのトグル（文字コード 'THUMBS_UP' として管理）
+      async function handleToggleThumbsUp(messageId) {
         if (!currentUser) return;
+        const symbol = 'THUMBS_UP';
         const existing = (reactions[messageId] || []).find(r => r.user_id === currentUser.id && r.symbol === symbol);
 
         if (existing) {
@@ -410,6 +438,10 @@
       }
 
       function validateInput(text) {
+        if (text.length > 200) {
+          alert('メッセージは200文字以内で入力してください。');
+          return false;
+        }
         for (const word of NG_WORDS) {
           if (text.includes(word)) {
             alert(`不適切な単語が含まれているため送信できません：「${word}」`);
@@ -480,6 +512,10 @@
 
       async function handleUpdateProfile() {
         if (!newUsername.trim() || !userProfile || !currentUser) return;
+        if (newBio.length > 400) {
+          alert('自己紹介は400文字以内で入力してください。');
+          return;
+        }
         const { error } = await supabase.from('profiles').upsert({ id: currentUser.id, username: newUsername, bio: newBio });
         if (error) {
           alert('プロフィールの更新に失敗しました: ' + error.message);
@@ -636,6 +672,8 @@
                       const username = msg.profile?.username || 'ユーザー';
                       const isStamp = msg.content.startsWith('[STAMP_IMG:');
                       const msgReactions = reactions[msg.id] || [];
+                      const thumbsUpCount = msgReactions.filter(r => r.symbol === 'THUMBS_UP').length;
+                      const isMyThumbsUp = msgReactions.some(r => r.symbol === 'THUMBS_UP' && r.user_id === currentUser?.id);
 
                       return (
                         <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
@@ -655,7 +693,6 @@
                               </span>
                             </div>
 
-                            {/* 吹き出し本文またはスタンプ */}
                             {isStamp ? (
                               <div 
                                 onTouchStart={() => handleTouchStart(username)} onTouchEnd={handleTouchEnd}
@@ -677,27 +714,19 @@
                               </div>
                             )}
 
-                            {/* リアクション機能（ボタン ＆ ついた記号の合計表示） */}
-                            <div className="flex items-center gap-1 mt-1 flex-wrap">
-                              {REACTION_SYMBOLS.map(sym => {
-                                const count = msgReactions.filter(r => r.symbol === sym).length;
-                                const isMyReaction = msgReactions.some(r => r.symbol === sym && r.user_id === currentUser?.id);
-
-                                return (
-                                  <button
-                                    key={sym}
-                                    onClick={() => handleToggleReaction(msg.id, sym)}
-                                    className={`px-1.5 py-0.5 text-[10px] rounded-full border transition flex items-center gap-0.5 ${
-                                      isMyReaction 
-                                        ? 'bg-accentBlueLight border-accentBlue text-accentBlue font-bold' 
-                                        : 'bg-cardBg border-borderSoft text-textSub hover:border-accentBlue'
-                                    }`}
-                                  >
-                                    <span>{sym}</span>
-                                    {count > 0 && <span>{count}</span>}
-                                  </button>
-                                );
-                              })}
+                            {/* サムズアップ（👍）リアクションボタン */}
+                            <div className="flex items-center gap-1 mt-1">
+                              <button
+                                onClick={() => handleToggleThumbsUp(msg.id)}
+                                className={`px-2 py-1 text-[10px] rounded-full border transition flex items-center gap-1 ${
+                                  isMyThumbsUp 
+                                    ? 'bg-accentBlueLight border-accentBlue text-accentBlue font-bold' 
+                                    : 'bg-cardBg border-borderSoft text-textSub hover:border-accentBlue'
+                                }`}
+                              >
+                                <ThumbsUpIcon className="w-3.5 h-3.5" />
+                                {thumbsUpCount > 0 && <span>{thumbsUpCount}</span>}
+                              </button>
                             </div>
                           </div>
 
@@ -723,7 +752,7 @@
                     <input
                       type="text"
                       disabled={isNightRestricted}
-                      placeholder={isNightRestricted ? 'お休み時間中（利用休止中）' : 'メッセージを入力...'}
+                      placeholder={isNightRestricted ? 'お休み時間中（利用休止中）' : 'メッセージを入力... (200文字以内)'}
                       value={inputText}
                       onChange={(e) => setInputText(e.target.value)}
                       className="flex-1 bg-bgMain rounded-full px-3 py-1.5 text-xs border border-borderSoft focus:outline-none focus:border-accentBlue disabled:bg-gray-100"
@@ -771,13 +800,16 @@
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-textSub block">自己紹介</label>
+                    <div className="flex justify-between items-center">
+                      <label className="text-[11px] font-bold text-textSub block">自己紹介</label>
+                      <span className="text-[9px] text-textSub">{newBio.length}/400文字</span>
+                    </div>
                     <textarea
                       value={newBio}
                       onChange={(e) => setNewBio(e.target.value)}
                       rows="3"
                       className="w-full text-xs border border-borderSoft p-2.5 rounded-xl focus:outline-none focus:border-accentBlue bg-bgMain resize-none"
-                      placeholder="好きなことや自己紹介を入力"
+                      placeholder="好きなことや自己紹介を入力 (400文字以内)"
                     />
                   </div>
 
@@ -786,6 +818,32 @@
                     className="w-full bg-textMain hover:bg-black text-white py-2.5 rounded-xl text-xs font-bold transition shadow-soft mt-2"
                   >
                     保存する
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ④ 自分だけが見れるメモ帳画面 */}
+            {currentTab === 'memo' && (
+              <div className="p-4 space-y-4">
+                <header className="border-b border-borderSoft pb-2.5">
+                  <h1 className="text-base font-bold text-textMain">自分だけのメモ帳</h1>
+                  <p className="text-[10px] text-textSub mt-0.5">他の人には見えない自分専用のスペースです</p>
+                </header>
+
+                <div className="bg-cardBg rounded-xl p-4 shadow-soft border border-borderSoft space-y-3">
+                  <textarea
+                    value={memoContent}
+                    onChange={(e) => setMemoContent(e.target.value)}
+                    rows="12"
+                    className="w-full text-xs border border-borderSoft p-3 rounded-xl focus:outline-none focus:border-accentBlue bg-bgMain resize-none leading-relaxed"
+                    placeholder="ここに自由にメモを残せます..."
+                  />
+                  <button
+                    onClick={handleSaveMemo}
+                    className="w-full bg-textMain hover:bg-black text-white py-2.5 rounded-xl text-xs font-bold transition shadow-soft"
+                  >
+                    メモを保存する
                   </button>
                 </div>
               </div>
@@ -857,7 +915,7 @@
             </div>
           )}
 
-          {/* 下部ナビゲーション */}
+          {/* 下部ナビゲーション（ホーム・プロフィール・メモ帳） */}
           <nav className="absolute bottom-0 w-full bg-cardBg border-t border-borderSoft flex justify-around items-center py-2 z-40 shadow-soft">
             <button
               onClick={() => { stopAudioCall(); setCurrentTab('home'); setIsStampPickerOpen(false); setViewingProfile(null); }}
@@ -865,6 +923,14 @@
             >
               <span className="text-xs mb-0.5">●</span>
               <span>ホーム</span>
+            </button>
+
+            <button
+              onClick={() => { stopAudioCall(); setCurrentTab('memo'); setIsStampPickerOpen(false); setViewingProfile(null); }}
+              className={`flex flex-col items-center text-[10px] font-bold transition ${currentTab === 'memo' ? 'text-accentBlue' : 'text-textSub'}`}
+            >
+              <span className="text-xs mb-0.5">●</span>
+              <span>メモ帳</span>
             </button>
 
             <button
