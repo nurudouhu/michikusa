@@ -178,7 +178,7 @@
 
       async function checkBanStatus(userId) {
         const { data } = await supabase.from('reports').select('id').eq('reported_id', userId);
-        if (data && data.length >= 2) {
+        if (data && data.length >= 5) {
           setIsBanned(true);
         }
       }
