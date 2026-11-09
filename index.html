@@ -108,6 +108,15 @@
       const [messages, setMessages] = useState([]);
       const [reactions, setReactions] = useState({});
       const [inputText, setInputText] = useState('');
+      // 管理者用表示設定（このブラウザに保存）
+      const [adminAvatar, setAdminAvatar] = useState(() => localStorage.getItem('michikusa_admin_avatar') || '');
+      const [announcements, setAnnouncements] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('michikusa_announcements') || '{}'); }
+        catch { return {}; }
+      });
+      const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
+      const [announcementDraft, setAnnouncementDraft] = useState('');
+      const adminAvatarInputRef = useRef(null);
       const [blockedUsers, setBlockedUsers] = useState([]);
       
       const [memoContent, setMemoContent] = useState('');
@@ -134,6 +143,10 @@
       const [notification, setNotification] = useState(null);
       const longPressTimer = useRef(null);
       const messagesEndRef = useRef(null);
+      const isAdmin = !!(userProfile && (userProfile.is_admin === true || userProfile.role === 'admin' || userProfile.role === 'administrator'));
+
+      useEffect(() => { localStorage.setItem('michikusa_admin_avatar', adminAvatar); }, [adminAvatar]);
+      useEffect(() => { localStorage.setItem('michikusa_announcements', JSON.stringify(announcements)); }, [announcements]);
 
       useEffect(() => {
         initAuth();
@@ -526,6 +539,39 @@
         }
       }
 
+      function handleAdminAvatarChange(e) {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) { alert('画像ファイルを選択してください。'); e.target.value = ''; return; }
+        if (file.size > 2 * 1024 * 1024) { alert('画像は2MB以下にしてください。'); e.target.value = ''; return; }
+        const reader = new FileReader();
+        reader.onload = () => setAdminAvatar(String(reader.result || ''));
+        reader.readAsDataURL(file);
+        e.target.value = '';
+      }
+
+      function openAnnouncementEditor() {
+        if (!isAdmin || !selectedRoom) return;
+        setAnnouncementDraft(announcements[selectedRoom.id] || '');
+        setShowAnnouncementModal(true);
+      }
+      function saveAnnouncement(e) {
+        e.preventDefault();
+        if (!isAdmin || !selectedRoom) return;
+        const value = announcementDraft.trim();
+        setAnnouncements(prev => {
+          const next = { ...prev };
+          if (value) next[selectedRoom.id] = value; else delete next[selectedRoom.id];
+          return next;
+        });
+        setShowAnnouncementModal(false);
+      }
+      function clearAnnouncement() {
+        if (!isAdmin || !selectedRoom) return;
+        setAnnouncements(prev => { const next = { ...prev }; delete next[selectedRoom.id]; return next; });
+        setAnnouncementDraft(''); setShowAnnouncementModal(false);
+      }
+
       function handleMention(username) {
         setInputText(prev => prev + `@${username} `);
       }
@@ -618,8 +664,22 @@
                     {activeCallMode === 'lunch' && ' (お昼休み通話中)'}
                     {activeCallMode === 'study' && ' (勉強会通話中)'}
                   </h2>
-                  <div className="w-8" />
+                  {isAdmin ? (
+                    <button onClick={openAnnouncementEditor} className="text-[9px] px-2 py-1 rounded-full border border-[#C9D9CF] bg-[#EEF4F0] text-[#315B49] font-extrabold">📢 お知らせ</button>
+                  ) : <div className="w-8" />}
                 </header>
+
+                {announcements[selectedRoom?.id] && !activeCallMode && (
+                  <div className="px-3 pt-2">
+                    <div className="flex items-start gap-2 rounded-xl border border-[#D7E1DA] bg-[#EEF4F0] px-3 py-2 text-[#315B49] shadow-soft">
+                      <span className="text-xs">📢</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[9px] font-extrabold mb-0.5">管理者からのお知らせ</p>
+                        <p className="text-[11px] leading-relaxed whitespace-pre-wrap break-words">{announcements[selectedRoom.id]}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {activeCallMode ? (
                   <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4 bg-cardBg m-3 rounded-2xl border border-borderSoft shadow-soft">
@@ -678,20 +738,23 @@
 
                       return (
                         <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
-                          <div 
+                          <div
                             onClick={() => setViewingProfile(msg.profile)}
-                            className="w-7 h-7 rounded-full bg-badgeBg border border-borderSoft flex items-center justify-center font-bold text-[10px] shrink-0 text-textSub mb-1 cursor-pointer hover:border-accentBlue"
+                            className={`w-7 h-7 rounded-full overflow-hidden border flex items-center justify-center font-bold text-[10px] shrink-0 mb-1 cursor-pointer ${msg.profile?.is_admin || msg.profile?.role === 'admin' || msg.profile?.role === 'administrator' ? 'bg-[#E8F0EC] border-[#C9D9CF] text-[#315B49]' : 'bg-badgeBg border-borderSoft text-textSub'}`}
                           >
-                            {username.substring(0, 1)}
+                            {(msg.profile?.is_admin || msg.profile?.role === 'admin' || msg.profile?.role === 'administrator') && adminAvatar
+                              ? <img src={adminAvatar} alt="管理者アイコン" className="w-full h-full object-cover" />
+                              : username.substring(0, 1)}
                           </div>
                           <div className={`flex flex-col max-w-[70%] ${isMe ? 'items-end' : 'items-start'}`}>
                             <div className="flex items-center gap-1.5 mb-0.5 px-1">
                               <span 
                                 onClick={() => handleMention(username)} 
-                                className="text-[9px] text-textSub font-bold cursor-pointer hover:text-accentBlue"
+                                className={`text-[9px] cursor-pointer hover:text-accentBlue ${(msg.profile?.is_admin || msg.profile?.role === 'admin' || msg.profile?.role === 'administrator') ? 'text-[#315B49] font-extrabold' : 'text-textSub font-bold'}`}
                               >
                                 {username}
                               </span>
+                              {(msg.profile?.is_admin || msg.profile?.role === 'admin' || msg.profile?.role === 'administrator') && <span className="text-[8px] px-1.5 py-0.5 rounded border border-[#D7E1DA] bg-[#EEF4F0] text-[#315B49] font-extrabold">✦ 管理者</span>}
                             </div>
 
                             {/* 吹き出し（長押しメニュー対応） */}
@@ -772,11 +835,20 @@
                   <h1 className="text-base font-bold text-textMain">プロフィール設定</h1>
                   <p className="text-[10px] text-textSub mt-0.5">名前や自己紹介を設定できます</p>
                 </header>
+                {isAdmin && (
+                  <div className="bg-[#EEF4F0] rounded-xl p-3 border border-[#D7E1DA] space-y-2">
+                    <p className="text-[11px] font-extrabold text-[#315B49]">✦ 管理者設定</p>
+                    <p className="text-[10px] text-[#587565]">管理者名はチャットで深いグリーンの太字になります。</p>
+                    <input ref={adminAvatarInputRef} type="file" accept="image/*" onChange={handleAdminAvatarChange} className="hidden" />
+                    <button onClick={() => adminAvatarInputRef.current?.click()} className="w-full py-2 rounded-lg bg-white border border-[#C9D9CF] text-[#315B49] text-[11px] font-bold">🖼️ 管理者アイコン画像を選択</button>
+                    {adminAvatar && <button onClick={() => setAdminAvatar('')} className="text-[10px] text-textSub underline">アイコン画像を解除</button>}
+                  </div>
+                )}
 
                 <div className="bg-cardBg rounded-xl p-4 shadow-soft border border-borderSoft space-y-3">
                   <div className="flex items-center gap-3 border-b border-borderSoft pb-3">
-                    <div className="w-12 h-12 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-base">
-                      {newUsername?.substring(0, 1) || '道'}
+                    <div className={`w-12 h-12 rounded-full overflow-hidden border flex items-center justify-center font-bold text-base ${isAdmin ? 'bg-[#E8F0EC] border-[#C9D9CF] text-[#315B49]' : 'bg-accentBlueLight border-accentBlue text-accentBlue'}`}>
+                      {isAdmin && adminAvatar ? <img src={adminAvatar} alt="管理者アイコン" className="w-full h-full object-cover" /> : (newUsername?.substring(0, 1) || '道')}
                     </div>
                     <div>
                       <p className="text-[10px] text-textSub">プレビュー</p>
@@ -883,6 +955,24 @@
             </div>
           )}
 
+          {showAnnouncementModal && isAdmin && selectedRoom && (
+            <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+              <form onSubmit={saveAnnouncement} className="bg-cardBg w-full max-w-xs rounded-2xl p-4 shadow-floating border border-[#D7E1DA] space-y-3">
+                <div className="flex justify-between items-center border-b border-borderSoft pb-2">
+                  <span className="text-xs font-extrabold text-[#315B49]">📢 アナウンス設定</span>
+                  <button type="button" onClick={() => setShowAnnouncementModal(false)} className="text-xs text-textSub font-bold">×</button>
+                </div>
+                <p className="text-[10px] text-textSub">「{selectedRoom.name}」のチャット上部に表示します。</p>
+                <textarea value={announcementDraft} onChange={e => setAnnouncementDraft(e.target.value)} maxLength={500} rows="4" placeholder="お知らせを入力..." className="w-full border border-borderSoft p-3 rounded-xl text-xs bg-bgMain focus:outline-none focus:border-[#9DB5A5] resize-y" />
+                <div className="flex gap-2">
+                  <button type="button" onClick={clearAnnouncement} className="px-2 py-2 text-[10px] font-bold text-red-500 bg-red-50 rounded-lg">解除</button>
+                  <button type="button" onClick={() => setShowAnnouncementModal(false)} className="flex-1 py-2 text-[10px] font-bold text-textSub bg-bgMain rounded-lg border border-borderSoft">キャンセル</button>
+                  <button type="submit" className="flex-1 py-2 text-[10px] font-bold text-white bg-[#315B49] rounded-lg">保存</button>
+                </div>
+              </form>
+            </div>
+          )}
+
           {/* プロフカード ＆ ブロック/通報モーダル */}
           {viewingProfile && (
             <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
@@ -892,11 +982,12 @@
                   <button onClick={() => setViewingProfile(null)} className="text-xs text-textSub font-bold">×</button>
                 </div>
                 <div className="flex items-center gap-3 pt-1">
-                  <div className="w-10 h-10 rounded-full bg-accentBlueLight border border-accentBlue text-accentBlue flex items-center justify-center font-bold text-sm shrink-0">
-                    {viewingProfile.username?.substring(0, 1) || '道'}
+                  <div className={`w-10 h-10 rounded-full overflow-hidden border flex items-center justify-center font-bold text-sm shrink-0 ${(viewingProfile.is_admin || viewingProfile.role === 'admin' || viewingProfile.role === 'administrator') ? 'bg-[#E8F0EC] border-[#C9D9CF] text-[#315B49]' : 'bg-accentBlueLight border-accentBlue text-accentBlue'}`}>
+                    {(viewingProfile.is_admin || viewingProfile.role === 'admin' || viewingProfile.role === 'administrator') && adminAvatar ? <img src={adminAvatar} alt="管理者アイコン" className="w-full h-full object-cover" /> : (viewingProfile.username?.substring(0, 1) || '道')}
                   </div>
                   <div>
-                    <h3 className="text-xs font-bold text-textMain">{viewingProfile.username || 'ユーザー'}</h3>
+                    <h3 className={`text-xs font-extrabold ${(viewingProfile.is_admin || viewingProfile.role === 'admin' || viewingProfile.role === 'administrator') ? 'text-[#315B49]' : 'text-textMain'}`}>{viewingProfile.username || 'ユーザー'}</h3>
+                    {(viewingProfile.is_admin || viewingProfile.role === 'admin' || viewingProfile.role === 'administrator') && <span className="text-[8px] text-[#315B49] font-extrabold">✦ 管理者</span>}
                     <p className="text-[10px] text-textSub">道クサメンバー</p>
                   </div>
                 </div>
