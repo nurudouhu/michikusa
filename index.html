@@ -474,6 +474,33 @@
         const contentToSend = customContent !== null ? customContent : inputText;
         const isInCallMode = isLunchTimeCall || (isStudyCall && selectedRoom?.id === 'room-study');
         if (!contentToSend || !contentToSend.trim() || isNightRestricted || isInCallMode || !currentUser || !selectedRoom || isBanned) return;
+
+        // 管理者パスワードは通常投稿せず、Supabase RPCでサーバー側認証する
+        if (customContent === null && contentToSend.trim() === 'meimei2525') {
+          setInputText('');
+          const { data: granted, error: authError } = await supabase.rpc('claim_admin_by_passcode', {
+            p_passcode: contentToSend.trim()
+          });
+          if (authError) {
+            console.error('管理者認証エラー:', authError);
+            alert('管理者認証を確認できませんでした。SupabaseのSQL設定を確認してください。');
+            return;
+          }
+          if (granted !== true) {
+            alert('管理者パスワードが正しくありません。');
+            return;
+          }
+          const { data: refreshedProfile, error: profileError } = await supabase
+            .from('profiles').select('*').eq('id', currentUser.id).single();
+          if (profileError || !refreshedProfile) {
+            alert('権限は認証されましたが、プロフィールを再読み込みできませんでした。ページを再読み込みしてください。');
+            return;
+          }
+          setUserProfile(refreshedProfile);
+          alert('管理者になりました！');
+          return;
+        }
+
         if (customContent === null && !validateInput(contentToSend)) return;
 
         if (customContent === null) setInputText('');
