@@ -998,6 +998,23 @@
                   >
                     @ 返信（メンション）
                   </button>
+
+                  {/* 自分のコメントだけ削除項目を表示 */}
+                  {currentUser && String(actionMenu.message.user_id) === String(currentUser.id) && (
+                    <button
+                      onClick={async () => {
+                        const messageId = actionMenu.message.id;
+                        setActionMenu(null);
+                        await handleDeleteMessage(messageId);
+                      }}
+                      className="w-full bg-red-50 border border-red-200 text-red-600 py-2.5 rounded-xl text-xs font-bold transition hover:bg-red-100"
+                    >
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <span>🗑️</span>
+                        <span>このコメントを削除</span>
+                      </span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
