@@ -779,10 +779,10 @@
                       const thumbsUpCount = msgReactions.filter(r => r.symbol === 'THUMBS_UP').length;
 
                       return (
-                        <div key={msg.id} className={`flex gap-2 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
+                        <div key={msg.id} className={`flex gap-0 items-end ${isMe ? 'flex-row-reverse' : ''}`}>
                           <div
                             onClick={() => setViewingProfile(msg.profile)}
-                            className={`w-7 h-7 rounded-full overflow-hidden border flex items-center justify-center font-bold text-[10px] shrink-0 mb-1 cursor-pointer ${msg.profile?.is_admin || msg.profile?.role === 'admin' || msg.profile?.role === 'administrator' ? 'bg-[#E8F0EC] border-[#C9D9CF] text-[#315B49]' : 'bg-badgeBg border-borderSoft text-textSub'}`}
+                            className={`w-7 h-7 rounded-full overflow-hidden border flex items-center justify-center font-bold text-[10px] shrink-0 mb-1 cursor-pointer ${isMe ? 'ml-2' : 'mr-2'} ${msg.profile?.is_admin || msg.profile?.role === 'admin' || msg.profile?.role === 'administrator' ? 'bg-[#E8F0EC] border-[#C9D9CF] text-[#315B49]' : 'bg-badgeBg border-borderSoft text-textSub'}`}
                           >
                             {(msg.profile?.is_admin || msg.profile?.role === 'admin' || msg.profile?.role === 'administrator') && adminAvatar
                               ? <img src={adminAvatar} alt="管理者アイコン" className="w-full h-full object-cover" />
