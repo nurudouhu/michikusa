@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <base target="_top" />
   <title>道クサ</title>
-  <link rel="icon" href="favicon.png" type="image/png" />
   
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -181,6 +181,7 @@
       const longPressTimer = useRef(null);
       const messagesEndRef = useRef(null);
       const profileCacheRef = useRef({});
+      const channelRef = useRef(null);
       useEffect(() => {
         const t = setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), 60);
         return () => clearTimeout(t);
@@ -292,6 +293,7 @@
           config: { broadcast: { self: false } }
         });
 
+        channelRef.current = channel;
         channel
           .on('broadcast', { event: 'webrtc-offer' }, async ({ payload }) => {
             if (payload.targetId === currentUser.id) {
@@ -307,6 +309,17 @@
             if (payload.targetId === currentUser.id) {
               await handleWebRTCCandidate(payload.senderId, payload.candidate);
             }
+          })
+          .on('broadcast', { event: 'new-message' }, ({ payload }) => {
+            if (payload && payload.room_id === selectedRoom.id) {
+              appendIncomingMessage(payload);
+              if (userProfile?.username && payload.content?.includes(`@${userProfile.username}`)) {
+                showNotification(`メッセージが届きました`);
+              }
+            }
+          })
+          .on('broadcast', { event: 'delete-message' }, ({ payload }) => {
+            if (payload?.id) setMessages(prev => prev.filter(m => m.id !== payload.id));
           })
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, async (payload) => {
             console.log('[道クサ] realtime INSERT 受信', payload.new?.id);
@@ -325,6 +338,7 @@
 
         return () => { 
           clearInterval(pollTimer);
+          channelRef.current = null;
           stopAudioCall();
           supabase.removeChannel(channel); 
         };
@@ -445,7 +459,8 @@
 
       // 受信した1件を即座に画面へ追加（重複は id で除外、自分の仮表示は置き換え）
       async function appendIncomingMessage(row) {
-        let profile = profileCacheRef.current[row.user_id];
+        let profile = row.profile || profileCacheRef.current[row.user_id];
+        if (row.profile) profileCacheRef.current[row.user_id] = row.profile;
         if (!profile) {
           const { data } = await supabase.from('profiles').select('*').eq('id', row.user_id).single();
           if (data) { profile = data; profileCacheRef.current[row.user_id] = data; }
@@ -594,6 +609,10 @@
           alert('送信できませんでした。もう一度お試しください。');
           return;
         }
+        // 相手の画面へ直接通知（DB経由の通知より速い）
+        try {
+          channelRef.current?.send({ type: 'broadcast', event: 'new-message', payload: { ...inserted, profile: userProfile } });
+        } catch (e) { console.warn('[道クサ] broadcast失敗', e); }
         // 仮表示を本物に置き換え（リアルタイムで先に届いていたら重複を除く）
         setMessages(prev => {
           const withoutTmp = prev.filter(m => m.id !== tmpId);
@@ -630,7 +649,10 @@
           alert('削除できませんでした。この投稿は自分のものではないか、削除権限がありません。');
           return;
         }
-        await fetchMessages();
+        setMessages(prev => prev.filter(m => m.id !== messageId));
+        try {
+          channelRef.current?.send({ type: 'broadcast', event: 'delete-message', payload: { id: messageId } });
+        } catch (e) { console.warn('[道クサ] broadcast失敗', e); }
       }
 
       async function handleBlockUser(targetUserId) {
