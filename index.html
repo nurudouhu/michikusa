@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>道クサ</title>
-  <!-- ファビコン設定 -->
   <link rel="icon" href="favicon.png" type="image/png" />
   
   <!-- Tailwind CSS (CDN) -->
@@ -60,7 +59,44 @@
 
     const SUPABASE_URL = 'https://tmujuurcxptdqgcprpqu.supabase.co';
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtdWp1dXJjeHB0ZHFnY3BycHF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxOTU1MTMsImV4cCI6MjEwNzc3MTUxM30.TJJsag5UetFYOzqQ02wMM73Lg0M6ut_aszxvi9hZEdA';
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ===== GAS(HtmlService)向け設定 =====
+    // スタンプ画像などの置き場所（Supabase Storage の公開バケット推奨）。末尾はスラッシュ。
+    // 例: https://xxxx.supabase.co/storage/v1/object/public/stamps/
+    const ASSET_BASE_URL = SUPABASE_URL + '/storage/v1/object/public/stamps/';
+
+    // GASのiframe内では localStorage が使えない場合があるため、失敗時はメモリにフォールバック
+    const safeStorage = (() => {
+      const mem = {};
+      let ok = false;
+      try {
+        const k = '__michikusa_test__';
+        window.localStorage.setItem(k, '1');
+        window.localStorage.removeItem(k);
+        ok = true;
+      } catch (e) { ok = false; }
+      return {
+        getItem: (k) => { try { return ok ? window.localStorage.getItem(k) : (k in mem ? mem[k] : null); } catch (e) { return k in mem ? mem[k] : null; } },
+        setItem: (k, v) => { try { if (ok) window.localStorage.setItem(k, v); else mem[k] = v; } catch (e) { mem[k] = v; } },
+        removeItem: (k) => { try { if (ok) window.localStorage.removeItem(k); else delete mem[k]; } catch (e) { delete mem[k]; } }
+      };
+    })();
+
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        storage: safeStorage,
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false   // GASのURLを認証リダイレクトとして解釈させない
+      }
+    });
+
+    // スタンプURLの解決: 絶対URLはそのまま、ファイル名だけ（旧データ）は ASSET_BASE_URL を付与
+    function resolveStampUrl(raw) {
+      if (!raw) return '';
+      if (/^(https?:)?\/\//.test(raw) || raw.startsWith('data:')) return raw;
+      return ASSET_BASE_URL + raw.replace(/^\.?\//, '');
+    }
 
     const DEFAULT_ROOMS = [
       { id: 'room-study', name: '勉強部屋', description: '自分のペースで静かに集中しよう' },
@@ -79,6 +115,7 @@
       { id: 'hitoiki', name: 'ほっとひと息', url: 'stamp10.png' },
       { id: 'iine', name: 'いいね！', url: 'stamp13.png' },
       { id: 'nemui', name: 'ねむい…', url: 'stamp14.png' },
+      { id: 'tsukareta', name: 'つかれた…', url: 'stamp15.png' },
       { id: 'matane', name: 'またね', url: 'stamp16.png' }
     ];
 
@@ -109,9 +146,9 @@
       const [reactions, setReactions] = useState({});
       const [inputText, setInputText] = useState('');
       // 管理者用表示設定（このブラウザに保存）
-      const [adminAvatar, setAdminAvatar] = useState(() => localStorage.getItem('michikusa_admin_avatar') || '');
+      const [adminAvatar, setAdminAvatar] = useState(() => safeStorage.getItem('michikusa_admin_avatar') || '');
       const [announcements, setAnnouncements] = useState(() => {
-        try { return JSON.parse(localStorage.getItem('michikusa_announcements') || '{}'); }
+        try { return JSON.parse(safeStorage.getItem('michikusa_announcements') || '{}'); }
         catch { return {}; }
       });
       const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
@@ -143,10 +180,15 @@
       const [notification, setNotification] = useState(null);
       const longPressTimer = useRef(null);
       const messagesEndRef = useRef(null);
+      const profileCacheRef = useRef({});
+      useEffect(() => {
+        const t = setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), 60);
+        return () => clearTimeout(t);
+      }, [messages.length, currentTab]);
       const isAdmin = !!(userProfile && (userProfile.is_admin === true || userProfile.role === 'admin' || userProfile.role === 'administrator'));
 
-      useEffect(() => { localStorage.setItem('michikusa_admin_avatar', adminAvatar); }, [adminAvatar]);
-      useEffect(() => { localStorage.setItem('michikusa_announcements', JSON.stringify(announcements)); }, [announcements]);
+      useEffect(() => { safeStorage.setItem('michikusa_admin_avatar', adminAvatar); }, [adminAvatar]);
+      useEffect(() => { safeStorage.setItem('michikusa_announcements', JSON.stringify(announcements)); }, [announcements]);
 
       useEffect(() => {
         initAuth();
@@ -244,6 +286,7 @@
         fetchMessages();
         fetchReactions();
         fetchBlockedUsers();
+        const pollTimer = setInterval(() => { fetchMessages(); fetchReactions(); }, 3000);
 
         const channel = supabase.channel(`room-${selectedRoom.id}`, {
           config: { broadcast: { self: false } }
@@ -265,8 +308,9 @@
               await handleWebRTCCandidate(payload.senderId, payload.candidate);
             }
           })
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, (payload) => {
-            fetchMessages();
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${selectedRoom.id}` }, async (payload) => {
+            console.log('[道クサ] realtime INSERT 受信', payload.new?.id);
+            await appendIncomingMessage(payload.new);
             if (userProfile?.username && payload.new.content.includes(`@${userProfile.username}`)) {
               showNotification(`メッセージが届きました`);
             }
@@ -277,9 +321,10 @@
           .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, () => {
             fetchReactions();
           })
-          .subscribe();
+          .subscribe((status, err) => { console.log('[道クサ] realtime:', status, err || ''); });
 
         return () => { 
+          clearInterval(pollTimer);
           stopAudioCall();
           supabase.removeChannel(channel); 
         };
@@ -398,6 +443,22 @@
         }
       }
 
+      // 受信した1件を即座に画面へ追加（重複は id で除外、自分の仮表示は置き換え）
+      async function appendIncomingMessage(row) {
+        let profile = profileCacheRef.current[row.user_id];
+        if (!profile) {
+          const { data } = await supabase.from('profiles').select('*').eq('id', row.user_id).single();
+          if (data) { profile = data; profileCacheRef.current[row.user_id] = data; }
+        }
+        setMessages(prev => {
+          if (prev.some(m => m.id === row.id)) return prev;
+          const tmpIdx = prev.findIndex(m => String(m.id).startsWith('tmp-') && m.user_id === row.user_id && m.content === row.content);
+          const full = { ...row, profile };
+          if (tmpIdx >= 0) { const next = prev.slice(); next[tmpIdx] = full; return next; }
+          return [...prev, full];
+        });
+      }
+
       function showNotification(text) {
         setNotification(text);
         setTimeout(() => { setNotification(null); }, 2000);
@@ -405,14 +466,22 @@
 
       async function fetchMessages() {
         if (!selectedRoom) return;
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('messages')
           .select('*, profile:profiles(*)')
           .eq('room_id', selectedRoom.id)
-          .order('created_at', { ascending: true });
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (error) console.error('[道クサ] fetchMessages error:', error);
         if (data) {
-          setMessages(data);
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          data.reverse();
+          console.log('[道クサ] fetched', data.length, 'latest:', data[data.length - 1]?.created_at);
+          data.forEach(m => { if (m.profile) profileCacheRef.current[m.user_id] = m.profile; });
+          // 送信中(仮表示)のメッセージは、取得結果に入るまで残す
+          setMessages(prev => {
+            const pending = prev.filter(m => String(m.id).startsWith('tmp-') && m.room_id === selectedRoom.id);
+            return pending.length ? [...data, ...pending] : data;
+          });
         }
       }
 
@@ -434,8 +503,10 @@
         const existing = (reactions[messageId] || []).find(r => r.user_id === currentUser.id && r.symbol === symbol);
 
         if (existing) {
+          setReactions(prev => ({ ...prev, [messageId]: (prev[messageId] || []).filter(r => r.id !== existing.id) }));
           await supabase.from('reactions').delete().eq('id', existing.id);
         } else {
+          setReactions(prev => ({ ...prev, [messageId]: [...(prev[messageId] || []), { id: 'tmp-' + Date.now(), message_id: messageId, user_id: currentUser.id, symbol }] }));
           await supabase.from('reactions').insert({
             message_id: messageId,
             user_id: currentUser.id,
@@ -505,16 +576,33 @@
 
         if (customContent === null) setInputText('');
         
-        const { error } = await supabase.from('messages').insert({
+        const tmpId = 'tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+        setMessages(prev => [...prev, {
+          id: tmpId, room_id: selectedRoom.id, user_id: currentUser.id,
+          content: contentToSend, created_at: new Date().toISOString(), profile: userProfile
+        }]);
+        setIsStampPickerOpen(false);
+
+        const { data: inserted, error } = await supabase.from('messages').insert({
           room_id: selectedRoom.id,
           user_id: currentUser.id,
           content: contentToSend
-        });
+        }).select().single();
 
-        if (!error) {
-          setIsStampPickerOpen(false);
-          fetchMessages();
+        if (error || !inserted) {
+          setMessages(prev => prev.filter(m => m.id !== tmpId));
+          alert('送信できませんでした。もう一度お試しください。');
+          return;
         }
+        // 仮表示を本物に置き換え（リアルタイムで先に届いていたら重複を除く）
+        setMessages(prev => {
+          const withoutTmp = prev.filter(m => m.id !== tmpId);
+          if (withoutTmp.some(m => m.id === inserted.id)) return withoutTmp;
+          const idx = prev.findIndex(m => m.id === tmpId);
+          const full = { ...inserted, profile: userProfile };
+          const next = prev.slice(); if (idx >= 0) next[idx] = full; else next.push(full);
+          return next;
+        });
       }
 
       function handleSendStamp(stamp) {
@@ -806,7 +894,7 @@
                                 onMouseDown={() => handleTouchStart(msg, username)} onMouseUp={handleTouchEnd}
                                 className="p-1 inline-block cursor-pointer select-none"
                               >
-                                <img src={msg.content.replace('[STAMP_IMG:', '').replace(']', '')} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
+                                <img src={resolveStampUrl(msg.content.replace('[STAMP_IMG:', '').replace(/\]$/, ''))} alt="スタンプ" className="w-24 h-24 object-contain rounded-xl" />
                               </div>
                             ) : (
                               <div 
@@ -1087,7 +1175,7 @@
                     onClick={() => handleSendStamp(stamp)}
                     className="p-1 border border-borderSoft rounded-lg hover:bg-bgMain transition flex flex-col items-center justify-center bg-white"
                   >
-                    <img src={stamp.url} alt={stamp.name} className="w-12 h-12 object-contain" />
+                    <img src={resolveStampUrl(stamp.url)} alt={stamp.name} className="w-12 h-12 object-contain" />
                     <span className="text-[9px] text-textSub mt-1">{stamp.name}</span>
                   </button>
                 ))}
